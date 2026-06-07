@@ -1,11 +1,8 @@
-use std::hash;
-
 use bevy::{
     color::palettes::basic::{BLACK, WHITE},
     prelude::*,
     window::WindowResolution,
 };
-use hashbrown;
 use random_word::Lang;
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
@@ -15,7 +12,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                resolution: WindowResolution::new(1080, 1440).with_scale_factor_override(1.0),
+                resolution: WindowResolution::new(1080, 1440).with_scale_factor_override(2.0),
                 ..default()
             }),
             ..default()
@@ -56,13 +53,13 @@ fn spawn_all_tiles(
     for i in 0..35 {
         let word = random_word::get(Lang::En);
         let tile_position: (f32, f32);
-        if word_tile_collection.is_empty() != true {
+        if i % 6 == 0 {
+            tile_position = create_tile_position(i, -600., 0, word.len());
+        } else {
             let last_tile = word_tile_collection.last().unwrap();
             let prev_word_len = last_tile.unique_word.len();
             let prev_word_pos_x = last_tile.pos_x;
             tile_position = create_tile_position(i, prev_word_pos_x, prev_word_len, word.len());
-        } else {
-            tile_position = create_tile_position(i, -300 as f32, 0, word.len());
         }
         let tile = WordTile {
             id: (i as f32),
@@ -86,17 +83,8 @@ fn spawn_all_tiles(
 }
 
 fn create_tile_position(i: usize, pos: f32, previous_len: usize, current_len: usize) -> (f32, f32) {
-    let row: f32 = pos + (previous_len * 20 / 2) as f32 + (current_len * 20 / 2) as f32;
-    let column: f32 = if i < 6 {
-        300.0
-    } else if i < 12 {
-        200.0
-    } else if i < 18 {
-        100.0
-    } else {
-        0.0
-    };
-
+    let row: f32 = pos + (previous_len * 12 / 2) as f32 + (current_len * 12 / 2) as f32 + 40 as f32;
+    let column = 300.0 - ((i / 6) as f32 * 100.0);
     return (row as f32, column as f32);
 }
 
@@ -110,9 +98,16 @@ fn spawn_word_tile(
 ) {
     commands
         .spawn((
-            Mesh2d(meshes.add(Rectangle::new((word.len() * 20) as f32, 50.))),
+            Mesh2d(meshes.add(Rectangle::new((word.len() * 10) as f32, 25.))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
             Transform::from_xyz(pos_x, pos_y, 2.),
         ))
-        .with_child((Text2d::new(word.as_str()), TextColor(Color::from(BLACK))));
+        .with_child((
+            Text2d::new(word.as_str()),
+            TextFont {
+                font_size: 14.,
+                ..default()
+            },
+            TextColor(Color::from(BLACK)),
+        ));
 }
