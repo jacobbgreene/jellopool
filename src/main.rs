@@ -56,9 +56,10 @@ fn spawn_all_tiles(
         if word_tile_collection.is_empty() != true {
             let last_tile = word_tile_collection.last().unwrap();
             let prev_word_len = last_tile.unique_word.len();
-            tile_position = create_tile_position(i, prev_word_len);
+            let prev_word_pos_x = last_tile.pos_x;
+            tile_position = create_tile_position(i, prev_word_pos_x, prev_word_len, word.len());
         } else {
-            tile_position = create_tile_position(i, 0);
+            tile_position = create_tile_position(i, -300 as f32, 0, word.len());
         }
         let tile = WordTile {
             id: (i as f32),
@@ -81,10 +82,10 @@ fn spawn_all_tiles(
     }
 }
 
-fn create_tile_position(i: usize, u: usize) -> (f32, f32) {
-    let mut row: f32 = (i as f32 / 6. * 150.) - 300.;
+fn create_tile_position(i: usize, pos: f32, previous_len: usize, current_len: usize) -> (f32, f32) {
+    let mut row: f32 = pos + (previous_len * 20 / 2) as f32 + (current_len * 20 / 2) as f32;
     let mut column: f32 = (i as f32 % 6. * 150.) - 300.;
-    if u > 6 {
+    if i > 6 {
         row = row + 50.;
         column = column + 50.;
     }
