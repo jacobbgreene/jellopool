@@ -1,8 +1,11 @@
+use std::hash;
+
 use bevy::{
     color::palettes::basic::{BLACK, WHITE},
     prelude::*,
     window::WindowResolution,
 };
+use hashbrown;
 use random_word::Lang;
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
@@ -83,12 +86,17 @@ fn spawn_all_tiles(
 }
 
 fn create_tile_position(i: usize, pos: f32, previous_len: usize, current_len: usize) -> (f32, f32) {
-    let mut row: f32 = pos + (previous_len * 20 / 2) as f32 + (current_len * 20 / 2) as f32;
-    let mut column: f32 = (i as f32 % 6. * 150.) - 300.;
-    if i > 6 {
-        row = row + 50.;
-        column = column + 50.;
-    }
+    let row: f32 = pos + (previous_len * 20 / 2) as f32 + (current_len * 20 / 2) as f32;
+    let column: f32 = if i < 6 {
+        300.0
+    } else if i < 12 {
+        200.0
+    } else if i < 18 {
+        100.0
+    } else {
+        0.0
+    };
+
     return (row as f32, column as f32);
 }
 
