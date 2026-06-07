@@ -37,7 +37,6 @@ fn spawn_board(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn(Camera2d);
-
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::default())),
         MeshMaterial2d(materials.add(Color::from(BLACK))),
@@ -53,7 +52,14 @@ fn spawn_all_tiles(
     let mut word_tile_collection: Vec<WordTile> = Vec::new();
     for i in 0..35 {
         let word = random_word::get(Lang::En);
-        let tile_position: (f32, f32) = create_tile_position(i);
+        let tile_position: (f32, f32);
+        if word_tile_collection.is_empty() != true {
+            let last_tile = word_tile_collection.last().unwrap();
+            let prev_word_len = last_tile.unique_word.len();
+            tile_position = create_tile_position(i, prev_word_len);
+        } else {
+            tile_position = create_tile_position(i, 0);
+        }
         let tile = WordTile {
             id: (i as f32),
             unique_word: String::from(word),
@@ -75,9 +81,13 @@ fn spawn_all_tiles(
     }
 }
 
-fn create_tile_position(i: usize) -> (f32, f32) {
-    let row: f32 = (i as f32 / 6. * 150.) - 300.;
-    let column: f32 = (i as f32 % 6. * 150.) - 300.;
+fn create_tile_position(i: usize, u: usize) -> (f32, f32) {
+    let mut row: f32 = (i as f32 / 6. * 150.) - 300.;
+    let mut column: f32 = (i as f32 % 6. * 150.) - 300.;
+    if u > 6 {
+        row = row + 50.;
+        column = column + 50.;
+    }
     return (row as f32, column as f32);
 }
 
