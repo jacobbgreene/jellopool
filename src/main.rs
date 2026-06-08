@@ -5,7 +5,6 @@ use bevy::{
 };
 use bevy_common_assets::ron::RonAssetPlugin;
 use rand::seq::IndexedRandom;
-use random_word::Lang;
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
 const _MAX_BOARD_HEIGHT: f32 = 2000.;
@@ -81,8 +80,8 @@ fn spawn_all_tiles(
 ) {
     let spawned_word_bank = word_banks.get(&word_bank_handle.0);
     if *spawned || spawned_word_bank.is_none() {
-        todo!("Address the AppState/Loading Screen setup later");
         return;
+        todo!("Address the AppState/Loading Screen setup later");
     }
     let spawned_word_bank = spawned_word_bank.unwrap();
     let selected_words = select_words(spawned_word_bank);
