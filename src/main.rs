@@ -4,7 +4,7 @@ use bevy::{
     window::{MonitorSelection, WindowMode},
 };
 use bevy_common_assets::ron::RonAssetPlugin;
-use rand::seq::IndexedRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
 const _MAX_BOARD_HEIGHT: f32 = 2000.;
@@ -81,7 +81,7 @@ fn spawn_all_tiles(
     let spawned_word_bank = word_banks.get(&word_bank_handle.0);
     if *spawned || spawned_word_bank.is_none() {
         return;
-        todo!("Address the AppState/Loading Screen setup later");
+        // TODO: "Address the AppState/Loading Screen setup later");
     }
     let spawned_word_bank = spawned_word_bank.unwrap();
     let selected_words = select_words(spawned_word_bank);
@@ -132,9 +132,9 @@ fn select_words(word_bank: &WordBank) -> Vec<String> {
     let plan = [
         (&word_bank.nouns, 6),
         (&word_bank.verbs, 6),
-        (&word_bank.adjectives, 3),
-        (&word_bank.adverbs, 5),
-        (&word_bank.pronouns, 5),
+        (&word_bank.adjectives, 4),
+        (&word_bank.adverbs, 2),
+        (&word_bank.pronouns, 6),
         (&word_bank.prepositions, 10),
         (&word_bank.conjunctions, 3),
         (&word_bank.articles, 3),
@@ -145,6 +145,7 @@ fn select_words(word_bank: &WordBank) -> Vec<String> {
         selected_words.extend(picked);
     }
 
+    selected_words.shuffle(&mut rng);
     return selected_words;
 }
 
