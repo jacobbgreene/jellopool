@@ -7,6 +7,8 @@ edition = "2024"
 bevy = "0.18.1"
 hashbrown = "0.17.1"
 random_word = { version = "0.5.2", features = ["en"] }
+ron = "0.12.1"
+serde = { version = "1.0.228", features = ["derive"] }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

@@ -1,22 +1,38 @@
 use bevy::{
     color::palettes::basic::{BLACK, WHITE},
     prelude::*,
-    window::WindowResolution,
+    window::{MonitorSelection, WindowMode},
 };
 use random_word::Lang;
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
 const _MAX_BOARD_HEIGHT: f32 = 2000.;
 
+#[derive(Asset, TypePath, serde::Deserialize)]
+pub struct WordBank {
+    pub nouns: Vec<String>,
+    pub verbs: Vec<String>,
+    pub adjectives: Vec<String>,
+    pub adverbs: Vec<String>,
+    pub pronouns: Vec<String>,
+    pub prepositions: Vec<String>,
+    pub conjunctions: Vec<String>,
+    pub articles: Vec<String>,
+}
+
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resolution: WindowResolution::new(1080, 1440).with_scale_factor_override(2.0),
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resizable: false,
+                    mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }))
+            MeshPickingPlugin,
+        ))
         .add_systems(Startup, spawn_board)
         .add_systems(Startup, spawn_all_tiles)
         .run();
@@ -54,7 +70,7 @@ fn spawn_all_tiles(
         let word = random_word::get(Lang::En);
         let tile_position: (f32, f32);
         if i % 6 == 0 {
-            tile_position = create_tile_position(i, -600., 0, word.len());
+            tile_position = create_tile_position(i, -800., 0, word.len());
         } else {
             let last_tile = word_tile_collection.last().unwrap();
             let prev_word_len = last_tile.unique_word.len();
@@ -83,8 +99,8 @@ fn spawn_all_tiles(
 }
 
 fn create_tile_position(i: usize, pos: f32, previous_len: usize, current_len: usize) -> (f32, f32) {
-    let row: f32 = pos + (previous_len * 12 / 2) as f32 + (current_len * 12 / 2) as f32 + 40 as f32;
-    let column = 300.0 - ((i / 6) as f32 * 100.0);
+    let row: f32 = pos + (previous_len * 12 / 2) as f32 + (current_len * 6 / 2) as f32 + 40 as f32;
+    let column = 300.0 - ((i / 6) as f32 * 30.0);
     return (row as f32, column as f32);
 }
 
@@ -109,5 +125,14 @@ fn spawn_word_tile(
                 ..default()
             },
             TextColor(Color::from(BLACK)),
-        ));
+        ))
+        .observe(
+            |event: On<Pointer<Drag>>, mut query: Query<&mut Transform>| {
+                let tile_delta = event.delta;
+                if let Ok(mut tile) = query.get_mut(event.entity) {
+                    tile.translation.x += tile_delta.x;
+                    tile.translation.y += tile_delta.y * -1.0;
+                }
+            },
+        );
 }
