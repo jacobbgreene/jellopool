@@ -3,6 +3,8 @@ use bevy::{
     prelude::*,
     window::{MonitorSelection, WindowMode},
 };
+use bevy_common_assets::ron::RonAssetPlugin;
+use rand::seq::IndexedRandom;
 use random_word::Lang;
 
 const _MAX_BOARD_WIDTH: f32 = 2000.;
@@ -32,9 +34,10 @@ fn main() {
                 ..default()
             }),
             MeshPickingPlugin,
+            RonAssetPlugin::<WordBank>::new(&["ron"]),
         ))
-        .add_systems(Startup, spawn_board)
-        .add_systems(Startup, spawn_all_tiles)
+        .add_systems(Startup, (spawn_board, load_word_bank))
+        .add_systems(Update, spawn_all_tiles)
         .run();
 }
 
@@ -45,6 +48,14 @@ struct WordTile {
     unique_word: String,
     pos_x: f32,
     pos_y: f32,
+}
+
+#[derive(Resource)]
+struct WordBankHandle(Handle<WordBank>);
+
+fn load_word_bank(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let asset: Handle<WordBank> = asset_server.load("word_bank.ron");
+    commands.insert_resource(WordBankHandle(asset));
 }
 
 fn spawn_board(
@@ -64,10 +75,20 @@ fn spawn_all_tiles(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut spawned: Local<bool>,
+    word_bank_handle: Res<WordBankHandle>,
+    word_banks: Res<Assets<WordBank>>,
 ) {
+    let spawned_word_bank = word_banks.get(&word_bank_handle.0);
+    if *spawned || spawned_word_bank.is_none() {
+        todo!("Address the AppState/Loading Screen setup later");
+        return;
+    }
+    let spawned_word_bank = spawned_word_bank.unwrap();
+    let selected_words = select_words(spawned_word_bank);
+
     let mut word_tile_collection: Vec<WordTile> = Vec::new();
-    for i in 0..35 {
-        let word = random_word::get(Lang::En);
+    for (i, word) in selected_words.iter().enumerate() {
         let tile_position: (f32, f32);
         if i % 6 == 0 {
             tile_position = create_tile_position(i, -800., 0, word.len());
@@ -96,12 +117,36 @@ fn spawn_all_tiles(
             word_tile.pos_y,
         );
     }
+    *spawned = true;
 }
 
 fn create_tile_position(i: usize, pos: f32, previous_len: usize, current_len: usize) -> (f32, f32) {
     let row: f32 = pos + (previous_len * 12 / 2) as f32 + (current_len * 6 / 2) as f32 + 40 as f32;
     let column = 300.0 - ((i / 6) as f32 * 30.0);
     return (row as f32, column as f32);
+}
+
+fn select_words(word_bank: &WordBank) -> Vec<String> {
+    let mut selected_words: Vec<String> = Vec::new();
+    let mut rng = rand::rng();
+
+    let plan = [
+        (&word_bank.nouns, 6),
+        (&word_bank.verbs, 6),
+        (&word_bank.adjectives, 3),
+        (&word_bank.adverbs, 5),
+        (&word_bank.pronouns, 5),
+        (&word_bank.prepositions, 10),
+        (&word_bank.conjunctions, 3),
+        (&word_bank.articles, 3),
+    ];
+
+    for (category, count) in &plan {
+        let picked: Vec<String> = category.sample(&mut rng, *count).cloned().collect();
+        selected_words.extend(picked);
+    }
+
+    return selected_words;
 }
 
 fn spawn_word_tile(
