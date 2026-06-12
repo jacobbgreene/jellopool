@@ -6,9 +6,6 @@ use bevy::{
 use bevy_common_assets::ron::RonAssetPlugin;
 use rand::seq::{IndexedRandom, SliceRandom};
 
-const _MAX_BOARD_WIDTH: f32 = 2000.;
-const _MAX_BOARD_HEIGHT: f32 = 2000.;
-
 #[derive(Asset, TypePath, serde::Deserialize)]
 pub struct WordBank {
     pub nouns: Vec<String>,
@@ -40,13 +37,13 @@ fn main() {
         .run();
 }
 
-//TODO: Make these draggable
 #[derive(Component)]
 struct WordTile {
     id: f32,
     unique_word: String,
     pos_x: f32,
     pos_y: f32,
+    pos_z: f32,
 }
 
 #[derive(Resource)]
@@ -66,7 +63,6 @@ fn spawn_board(
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::default())),
         MeshMaterial2d(materials.add(Color::from(BLACK))),
-        Transform::default().with_scale(Vec3::new(_MAX_BOARD_WIDTH, _MAX_BOARD_HEIGHT, 1.)),
     ));
 }
 
@@ -102,6 +98,7 @@ fn spawn_all_tiles(
             unique_word: String::from(word),
             pos_x: tile_position.0,
             pos_y: tile_position.1,
+            pos_z: i as f32,
         };
         word_tile_collection.push(tile);
     }
@@ -158,6 +155,7 @@ fn spawn_word_tile(
         ))
         .with_child((
             Text2d::new(word),
+            Transform::from_xyz(0., 0., 1.),
             TextFont {
                 font_size: 14.,
                 ..default()
@@ -165,12 +163,83 @@ fn spawn_word_tile(
             TextColor(Color::from(BLACK)),
         ))
         .observe(
-            |event: On<Pointer<Drag>>, mut query: Query<&mut Transform>| {
+            |event: On<Pointer<Drag>>, mut tiles_query: Query<(&WordTile, &mut Transform)>| {
                 let tile_delta = event.delta;
-                if let Ok(mut tile) = query.get_mut(event.entity) {
-                    tile.translation.x += tile_delta.x;
-                    tile.translation.y += tile_delta.y * -1.0;
+                let mut z_position: f32 = 0.;
+                let mut update: bool = false;
+
+                let (dragged_tile_id, dragged_word_len, dragged_tile_pos) = {
+                    let (word_tile, mut transform) = tiles_query.get_mut(event.entity).unwrap();
+                    transform.translation.x += tile_delta.x;
+                    transform.translation.y += tile_delta.y * -1.0;
+                    (
+                        word_tile.id,
+                        word_tile.unique_word.len(),
+                        transform.translation.clone(),
+                    )
+                };
+
+                for (other_tile, other_transform) in tiles_query.iter() {
+                    if other_tile.id == dragged_tile_id {
+                        continue;
+                    } else if overlap(
+                        dragged_tile_pos,
+                        dragged_word_len,
+                        other_tile,
+                        other_transform,
+                    ) {
+                        z_position = z_position.max(other_transform.translation.z);
+                        update = true;
+                    }
+                }
+
+                if update {
+                    if let Ok((_, mut transform)) = tiles_query.get_mut(event.entity) {
+                        println!(
+                            "Updating z from {} to {}",
+                            transform.translation.z,
+                            z_position + 1.0
+                        );
+                        transform.translation.z = z_position + 10.0;
+                    }
                 }
             },
         );
+}
+
+struct TileRange {
+    left_edge: f32,
+    right_edge: f32,
+    bottom_edge: f32,
+    top_edge: f32,
+}
+
+fn overlap(
+    dragged_tile_position: Vec3,
+    dragged_word_len: usize,
+    word_tile_b: &WordTile,
+    word_tile_b_tranform: &Transform,
+) -> bool {
+    let range_a: TileRange = get_tile_range(dragged_tile_position, dragged_word_len);
+    let range_b: TileRange = get_tile_range(
+        word_tile_b_tranform.translation,
+        word_tile_b.unique_word.len(),
+    );
+    if (range_a.left_edge < range_b.right_edge && range_b.left_edge < range_a.right_edge)
+        && (range_a.bottom_edge < range_b.top_edge && range_b.bottom_edge < range_a.top_edge)
+    {
+        return true;
+    }
+    false
+}
+
+fn get_tile_range(position: Vec3, word_len: usize) -> TileRange {
+    let width = (word_len * 10) as f32;
+    let height = 25.0;
+    TileRange {
+        left_edge: position.x - width / 2.0,
+        right_edge: position.x + width / 2.0,
+        bottom_edge: position.y - height / 2.0,
+        top_edge: position.y + height / 2.0,
+    }
 }
