@@ -106,15 +106,8 @@ fn spawn_all_tiles(
         word_tile_collection.push(tile);
     }
 
-    for word_tile in word_tile_collection.iter_mut() {
-        spawn_word_tile(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            &word_tile.unique_word,
-            word_tile.pos_x,
-            word_tile.pos_y,
-        );
+    for word_tile in word_tile_collection.into_iter() {
+        spawn_word_tile(&mut commands, &mut meshes, &mut materials, word_tile);
     }
     *spawned = true;
 }
@@ -153,18 +146,21 @@ fn spawn_word_tile(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
-    word: &String,
-    pos_x: f32,
-    pos_y: f32,
+    word_tile: WordTile,
 ) {
+    let word = String::from(&word_tile.unique_word);
     commands
         .spawn((
-            Mesh2d(meshes.add(Rectangle::new((word.len() * 10) as f32, 25.))),
+            Mesh2d(meshes.add(Rectangle::new(
+                (&word_tile.unique_word.len() * 10) as f32,
+                25.,
+            ))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
-            Transform::from_xyz(pos_x, pos_y, 2.),
+            Transform::from_xyz(word_tile.pos_x, word_tile.pos_y, 2.),
+            word_tile,
         ))
         .with_child((
-            Text2d::new(word.as_str()),
+            Text2d::new(word),
             TextFont {
                 font_size: 14.,
                 ..default()
