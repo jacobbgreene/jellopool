@@ -146,12 +146,17 @@ fn spawn_word_tile(
     word_tile: WordTile,
 ) {
     let word = String::from(&word_tile.unique_word);
+
     commands
         .spawn((
+            Mesh2d(meshes.add(Rectangle::new((word.len() * 10 + 2) as f32, 27.))),
+            MeshMaterial2d(materials.add(Color::from(BLACK))),
+            Transform::from_xyz(word_tile.pos_x.clone(), word_tile.pos_y.clone(), 2.),
+            word_tile,
+        ))
+        .with_child((
             Mesh2d(meshes.add(Rectangle::new((word.len() * 10) as f32, 25.))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
-            Transform::from_xyz(word_tile.pos_x, word_tile.pos_y, 2.),
-            word_tile,
         ))
         .with_child((
             Text2d::new(word),
@@ -195,12 +200,8 @@ fn spawn_word_tile(
 
                 if update {
                     if let Ok((_, mut transform)) = tiles_query.get_mut(event.entity) {
-                        println!(
-                            "Updating z from {} to {}",
-                            transform.translation.z,
-                            z_position + 1.0
-                        );
-                        transform.translation.z = z_position + 10.0;
+                        //TODO: Re-normalize tile positions to prevent them all from getting too high
+                        transform.translation.z = z_position + 10.;
                     }
                 }
             },
