@@ -1,6 +1,7 @@
 use bevy::{
     color::palettes::basic::{BLACK, WHITE},
     prelude::*,
+    transform,
     window::{MonitorSelection, WindowMode},
 };
 use bevy_common_assets::ron::RonAssetPlugin;
@@ -200,8 +201,12 @@ fn spawn_word_tile(
 
                 if update {
                     if let Ok((_, mut transform)) = tiles_query.get_mut(event.entity) {
-                        //TODO: Re-normalize tile positions to prevent them all from getting too high
                         transform.translation.z = z_position + 10.;
+                    }
+
+                    if z_position > 900. {
+                        let mut stored_tiles: Vec<(Entity, f32)> = Vec::new();
+                        for tile in tiles_query.iter_mut() {}
                     }
                 }
             },
