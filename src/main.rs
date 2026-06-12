@@ -151,10 +151,7 @@ fn spawn_word_tile(
     let word = String::from(&word_tile.unique_word);
     commands
         .spawn((
-            Mesh2d(meshes.add(Rectangle::new(
-                (&word_tile.unique_word.len() * 10) as f32,
-                25.,
-            ))),
+            Mesh2d(meshes.add(Rectangle::new((word.len() * 10) as f32, 25.))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
             Transform::from_xyz(word_tile.pos_x, word_tile.pos_y, 2.),
             word_tile,
