@@ -1,7 +1,6 @@
 use bevy::{
     color::palettes::basic::{BLACK, WHITE},
     prelude::*,
-    transform,
     window::{MonitorSelection, WindowMode},
 };
 use bevy_common_assets::ron::RonAssetPlugin;
@@ -40,11 +39,9 @@ fn main() {
 
 #[derive(Component)]
 struct WordTile {
-    id: f32,
     unique_word: String,
     pos_x: f32,
     pos_y: f32,
-    pos_z: f32,
 }
 
 #[derive(Resource)]
@@ -95,11 +92,9 @@ fn spawn_all_tiles(
             tile_position = create_tile_position(i, prev_word_pos_x, prev_word_len, word.len());
         }
         let tile = WordTile {
-            id: (i as f32),
             unique_word: String::from(word),
             pos_x: tile_position.0,
             pos_y: tile_position.1,
-            pos_z: i as f32,
         };
         word_tile_collection.push(tile);
     }
@@ -120,6 +115,8 @@ fn select_words(word_bank: &WordBank) -> Vec<String> {
     let mut selected_words: Vec<String> = Vec::new();
     let mut rng = rand::rng();
 
+    //TODO: Get a more consistent/optimal ration for words
+    // There should be a slider or something for users to pick how many words they want
     let plan = [
         (&word_bank.nouns, 6),
         (&word_bank.verbs, 6),
@@ -169,24 +166,24 @@ fn spawn_word_tile(
             TextColor(Color::from(BLACK)),
         ))
         .observe(
-            |event: On<Pointer<Drag>>, mut tiles_query: Query<(&WordTile, &mut Transform)>| {
+            |event: On<Pointer<Drag>>,
+             mut tiles_query: Query<(Entity, &WordTile, &mut Transform)>| {
                 let tile_delta = event.delta;
                 let mut z_position: f32 = 0.;
                 let mut update: bool = false;
 
-                let (dragged_tile_id, dragged_word_len, dragged_tile_pos) = {
-                    let (word_tile, mut transform) = tiles_query.get_mut(event.entity).unwrap();
+                // Moving the tiles position
+                let (dragged_word_len, dragged_tile_pos) = {
+                    let (_, word_tile, mut transform) = tiles_query.get_mut(event.entity).unwrap();
                     transform.translation.x += tile_delta.x;
                     transform.translation.y += tile_delta.y * -1.0;
-                    (
-                        word_tile.id,
-                        word_tile.unique_word.len(),
-                        transform.translation.clone(),
-                    )
+                    (word_tile.unique_word.len(), transform.translation.clone())
                 };
 
-                for (other_tile, other_transform) in tiles_query.iter() {
-                    if other_tile.id == dragged_tile_id {
+                //Checking if the tile is overlapping with any other tile
+                // Setting update == true when we do find an overlap
+                for (other_entity, other_tile, other_transform) in tiles_query.iter() {
+                    if event.entity == other_entity {
                         continue;
                     } else if overlap(
                         dragged_tile_pos,
@@ -200,8 +197,14 @@ fn spawn_word_tile(
                 }
 
                 if update {
-                    if let Ok((_, mut transform)) = tiles_query.get_mut(event.entity) {
+                    //adding 10 to the z position to bring the tile to the front if update is true
+                    if let Ok((_, _, mut transform)) = tiles_query.get_mut(event.entity) {
                         transform.translation.z = z_position + 10.;
+                    } else {
+                        println!(
+                            "Failed to get mutable transform for entity: {:?}",
+                            event.entity
+                        );
                     }
 
                     if z_position > 900. {
