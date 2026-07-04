@@ -1,3 +1,4 @@
+use crate::states::AppState;
 use bevy::prelude::*;
 use rand::seq::{IndexedRandom, SliceRandom};
 
@@ -45,4 +46,14 @@ pub(crate) fn select_words(word_bank: &WordBank) -> Vec<String> {
 
     selected_words.shuffle(&mut rng);
     return selected_words;
+}
+
+fn switch_to_playing_state(
+    handle: Res<WordBankHandle>,
+    banks: Res<Assets<WordBank>>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    if banks.get(&handle.0).is_some() {
+        next_state.set(AppState::Playing);
+    }
 }

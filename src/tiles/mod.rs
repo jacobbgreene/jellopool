@@ -21,10 +21,14 @@ pub fn spawn_all_tiles(
     word_bank_handle: Res<WordBankHandle>,
     word_banks: Res<Assets<WordBank>>,
 ) {
+    // TODO(state): replace this spawned/asset-loaded guard with real state flow:
+    //   1. register AppState in main (init_state::<AppState>())
+    //   2. transition Loading -> Playing once the WordBank asset has loaded
+    //   3. run this system with run_if(in_state(AppState::Playing)) in a SystemSet,
+    //      which lets the Local<bool> latch go away
     let spawned_word_bank = word_banks.get(&word_bank_handle.0);
     if *spawned || spawned_word_bank.is_none() {
         return;
-        // TODO: "Address the AppState/Loading Screen setup later");
     }
     let spawned_word_bank = spawned_word_bank.unwrap();
     let selected_words = select_words(spawned_word_bank);
@@ -62,6 +66,9 @@ fn spawn_word_tile(
 ) {
     let word = String::from(&word_tile.unique_word);
 
+    // TODO(cleanup): lead this bundle with Name::new(..) + a state-scope component
+    //   (DespawnOnExit(AppState::Playing) / StateScoped) so tiles are debuggable and
+    //   get torn down when leaving Playing.
     commands
         .spawn((
             Mesh2d(meshes.add(Rectangle::new((word.len() * 10 + 2) as f32, 27.))),

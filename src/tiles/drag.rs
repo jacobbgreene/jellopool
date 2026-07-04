@@ -45,6 +45,9 @@ pub fn on_tile_drag(
         }
 
         if z_position > 900. {
+            // TODO(restack): unfinished. When the stack climbs past z=900, collect the
+            //   tiles here and normalize their z back down so it doesn't run away.
+            //   stored_tiles + the empty loop below are placeholders for that logic.
             let mut stored_tiles: Vec<(Entity, f32)> = Vec::new();
             for tile in tiles_query.iter_mut() {}
         }
