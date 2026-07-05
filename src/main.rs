@@ -6,8 +6,10 @@ mod tiles;
 mod word_bank;
 
 use crate::{
-    board::spawn_board, states::AppState, tiles::spawn_all_tiles, word_bank::WordBank,
-    word_bank::load_word_bank,
+    board::spawn_board,
+    states::AppState,
+    tiles::spawn_all_tiles,
+    word_bank::{WordBank, load_word_bank, switch_to_playing_state},
 };
 use bevy::window::{MonitorSelection, WindowMode};
 use bevy_common_assets::ron::RonAssetPlugin;
@@ -28,6 +30,10 @@ fn main() {
         ))
         .init_state::<AppState>()
         .add_systems(Startup, (spawn_board, load_word_bank))
-        .add_systems(Update, spawn_all_tiles)
+        .add_systems(
+            Update,
+            switch_to_playing_state.run_if(in_state(AppState::Loading)),
+        )
+        .add_systems(OnEnter(AppState::Playing), spawn_all_tiles)
         .run();
 }

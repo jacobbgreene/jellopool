@@ -1,5 +1,6 @@
 mod drag;
 mod layout;
+use crate::states::AppState;
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
 use bevy::color::palettes::basic::{BLACK, WHITE};
 use bevy::prelude::*;
@@ -17,20 +18,13 @@ pub fn spawn_all_tiles(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut spawned: Local<bool>,
     word_bank_handle: Res<WordBankHandle>,
     word_banks: Res<Assets<WordBank>>,
 ) {
-    // TODO(state): replace this spawned/asset-loaded guard with real state flow:
-    //   1. register AppState in main (init_state::<AppState>())
-    //   2. transition Loading -> Playing once the WordBank asset has loaded
-    //   3. run this system with run_if(in_state(AppState::Playing)) in a SystemSet,
-    //      which lets the Local<bool> latch go away
-    let spawned_word_bank = word_banks.get(&word_bank_handle.0);
-    if *spawned || spawned_word_bank.is_none() {
+    let Some(spawned_word_bank) = word_banks.get(&word_bank_handle.0) else {
         return;
-    }
-    let spawned_word_bank = spawned_word_bank.unwrap();
+    };
+
     let selected_words = select_words(spawned_word_bank);
 
     let mut word_tile_collection: Vec<WordTile> = Vec::new();
@@ -55,7 +49,6 @@ pub fn spawn_all_tiles(
     for word_tile in word_tile_collection.into_iter() {
         spawn_word_tile(&mut commands, &mut meshes, &mut materials, word_tile);
     }
-    *spawned = true;
 }
 
 fn spawn_word_tile(
@@ -65,19 +58,17 @@ fn spawn_word_tile(
     word_tile: WordTile,
 ) {
     let word = String::from(&word_tile.unique_word);
-
-    // TODO(cleanup): lead this bundle with Name::new(..) + a state-scope component
-    //   (DespawnOnExit(AppState::Playing) / StateScoped) so tiles are debuggable and
-    //   get torn down when leaving Playing.
     commands
         .spawn((
-            Mesh2d(meshes.add(Rectangle::new((word.len() * 10 + 2) as f32, 27.))),
+            Name::new(String::from(&word_tile.unique_word)),
+            DespawnOnExit(AppState::Playing),
+            Mesh2d(meshes.add(Rectangle::new((&word.len() * 10 + 2) as f32, 27.))),
             MeshMaterial2d(materials.add(Color::from(BLACK))),
             Transform::from_xyz(word_tile.pos_x.clone(), word_tile.pos_y.clone(), 2.),
             word_tile,
         ))
         .with_child((
-            Mesh2d(meshes.add(Rectangle::new((word.len() * 10) as f32, 25.))),
+            Mesh2d(meshes.add(Rectangle::new((&word.len() * 10) as f32, 25.))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
         ))
         .with_child((

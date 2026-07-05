@@ -48,7 +48,7 @@ pub(crate) fn select_words(word_bank: &WordBank) -> Vec<String> {
     return selected_words;
 }
 
-fn switch_to_playing_state(
+pub fn switch_to_playing_state(
     handle: Res<WordBankHandle>,
     banks: Res<Assets<WordBank>>,
     mut next_state: ResMut<NextState<AppState>>,
