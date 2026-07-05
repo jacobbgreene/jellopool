@@ -10,8 +10,15 @@ use layout::create_tile_position;
 #[derive(Component)]
 pub struct WordTile {
     unique_word: String,
-    pos_x: f32,
-    pos_y: f32,
+    //size has the x and y positions for the tile
+    size: Vec2,
+}
+
+#[derive(Component)]
+pub struct TileMotion {
+    target: Vec2,
+    target_scale: f32,
+    base_rotation: f32,
 }
 
 pub fn spawn_all_tiles(
@@ -21,33 +28,47 @@ pub fn spawn_all_tiles(
     word_bank_handle: Res<WordBankHandle>,
     word_banks: Res<Assets<WordBank>>,
 ) {
+    //For each tile in our word bank, spawn a tile and it's respective motion
+    //motion is just tracking it's actual position and scale
     let Some(spawned_word_bank) = word_banks.get(&word_bank_handle.0) else {
         return;
     };
 
     let selected_words = select_words(spawned_word_bank);
 
-    let mut word_tile_collection: Vec<WordTile> = Vec::new();
+    let mut word_tile_collection: Vec<(WordTile, TileMotion)> = Vec::new();
     for (i, word) in selected_words.iter().enumerate() {
         let tile_position: (f32, f32);
         if i % 6 == 0 {
             tile_position = create_tile_position(i, -800., 0, word.len());
         } else {
-            let last_tile = word_tile_collection.last().unwrap();
+            let Some(last_tile) = word_tile_collection.last().map(|(tile, _)| tile) else {
+                continue;
+            };
             let prev_word_len = last_tile.unique_word.len();
-            let prev_word_pos_x = last_tile.pos_x;
+            let prev_word_pos_x = last_tile.size.x;
             tile_position = create_tile_position(i, prev_word_pos_x, prev_word_len, word.len());
         }
         let tile = WordTile {
             unique_word: String::from(word),
-            pos_x: tile_position.0,
-            pos_y: tile_position.1,
+            size: Vec2::new(tile_position.0, tile_position.1),
         };
-        word_tile_collection.push(tile);
+        let motion = TileMotion {
+            target: Vec2::new(tile_position.0, tile_position.1),
+            target_scale: 1.,
+            base_rotation: 0.,
+        };
+        word_tile_collection.push((tile, motion));
     }
 
-    for word_tile in word_tile_collection.into_iter() {
-        spawn_word_tile(&mut commands, &mut meshes, &mut materials, word_tile);
+    for (word_tile, motion) in word_tile_collection.into_iter() {
+        spawn_word_tile(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            word_tile,
+            motion,
+        );
     }
 }
 
@@ -56,16 +77,18 @@ fn spawn_word_tile(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     word_tile: WordTile,
+    motion: TileMotion,
 ) {
     let word = String::from(&word_tile.unique_word);
     commands
         .spawn((
-            Name::new(String::from(&word_tile.unique_word)),
+            Name::new(word.clone()),
             DespawnOnExit(AppState::Playing),
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10 + 2) as f32, 27.))),
             MeshMaterial2d(materials.add(Color::from(BLACK))),
-            Transform::from_xyz(word_tile.pos_x.clone(), word_tile.pos_y.clone(), 2.),
+            Transform::from_xyz(word_tile.size.x.clone(), word_tile.size.y.clone(), 2.),
             word_tile,
+            motion,
         ))
         .with_child((
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10) as f32, 25.))),
@@ -81,4 +104,14 @@ fn spawn_word_tile(
             TextColor(Color::from(BLACK)),
         ))
         .observe(on_tile_drag);
+}
+
+pub fn move_tiles(time: Res<Time>, mut tiles: Query<(&TileMotion, &mut Transform)>) {
+    let dt = time.delta_secs();
+    let speed = 38.0;
+    let ease = 1.0 - (-speed * dt).exp();
+    for (motion, mut transform) in &mut tiles {
+        transform.translation.x += (motion.target.x - transform.translation.x) * ease;
+        transform.translation.y += (motion.target.y - transform.translation.y) * ease;
+    }
 }

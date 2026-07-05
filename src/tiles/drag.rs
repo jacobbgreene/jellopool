@@ -1,57 +1,25 @@
-use super::WordTile;
+use super::{TileMotion, WordTile};
+use crate::board::BoardLayout;
 use bevy::prelude::*;
 
 pub fn on_tile_drag(
     event: On<Pointer<Drag>>,
-    mut tiles_query: Query<(Entity, &WordTile, &mut Transform)>,
+    mut tiles_query: Query<(Entity, &WordTile, &mut TileMotion, &mut Transform)>,
+    layout: Res<BoardLayout>,
 ) {
-    let tile_delta = event.delta;
-    let mut z_position: f32 = 0.;
-    let mut update: bool = false;
-
-    // Moving the tiles position
-    let (dragged_word_len, dragged_tile_pos) = {
-        let (_, word_tile, mut transform) = tiles_query.get_mut(event.entity).unwrap();
-        transform.translation.x += tile_delta.x;
-        transform.translation.y += tile_delta.y * -1.0;
-        (word_tile.unique_word.len(), transform.translation.clone())
+    //Get the delta of the tile drag and update the motion first
+    let Ok((_, tile, mut motion, _)) = tiles_query.get_mut(event.entity) else {
+        println!(
+            "Failed to get mutable tile motion for entity: {:?}",
+            event.entity
+        );
+        return;
     };
 
-    //Checking if the tile is overlapping with any other tile
-    // Setting update == true when we do find an overlap
-    for (other_entity, other_tile, other_transform) in tiles_query.iter() {
-        if event.entity == other_entity {
-            continue;
-        } else if overlap(
-            dragged_tile_pos,
-            dragged_word_len,
-            other_tile,
-            other_transform,
-        ) {
-            z_position = z_position.max(other_transform.translation.z);
-            update = true;
-        }
-    }
-
-    if update {
-        //adding 10 to the z position to bring the tile to the front if update is true
-        if let Ok((_, _, mut transform)) = tiles_query.get_mut(event.entity) {
-            transform.translation.z = z_position + 10.;
-        } else {
-            println!(
-                "Failed to get mutable transform for entity: {:?}",
-                event.entity
-            );
-        }
-
-        if z_position > 900. {
-            // TODO(restack): unfinished. When the stack climbs past z=900, collect the
-            //   tiles here and normalize their z back down so it doesn't run away.
-            //   stored_tiles + the empty loop below are placeholders for that logic.
-            let mut stored_tiles: Vec<(Entity, f32)> = Vec::new();
-            for tile in tiles_query.iter_mut() {}
-        }
-    }
+    motion.target = layout.clamp_tile(
+        motion.target + Vec2::new(event.delta.x, -event.delta.y),
+        tile.size,
+    );
 }
 
 struct TileRange {
