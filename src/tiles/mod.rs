@@ -7,6 +7,9 @@ use bevy::prelude::*;
 use drag::on_tile_drag;
 use layout::create_tile_position;
 
+const BOARD_COLOR: Srgba = BLACK;
+const TILE_COLOR: Srgba = WHITE;
+
 #[derive(Component)]
 pub struct WordTile {
     unique_word: String,
@@ -85,14 +88,14 @@ fn spawn_word_tile(
             Name::new(word.clone()),
             DespawnOnExit(AppState::Playing),
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10 + 2) as f32, 27.))),
-            MeshMaterial2d(materials.add(Color::from(BLACK))),
+            MeshMaterial2d(materials.add(Color::from(BOARD_COLOR))),
             Transform::from_xyz(word_tile.size.x.clone(), word_tile.size.y.clone(), 2.),
             word_tile,
             motion,
         ))
         .with_child((
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10) as f32, 25.))),
-            MeshMaterial2d(materials.add(Color::from(WHITE))),
+            MeshMaterial2d(materials.add(Color::from(TILE_COLOR))),
         ))
         .with_child((
             Text2d::new(word),
@@ -101,7 +104,7 @@ fn spawn_word_tile(
                 font_size: 14.,
                 ..default()
             },
-            TextColor(Color::from(BLACK)),
+            TextColor(Color::from(BOARD_COLOR)),
         ))
         .observe(on_tile_drag);
 }
