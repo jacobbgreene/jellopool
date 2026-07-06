@@ -3,13 +3,13 @@ mod layout;
 use crate::states::AppState;
 use crate::tiles::drag::{tile_drag_end, tile_drag_start};
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
-use bevy::color::palettes::basic::{BLACK, WHITE};
+use bevy::color::palettes::basic::{BLACK, GRAY, WHITE};
 use bevy::prelude::*;
-use bevy::render::render_resource::ShaderType;
 use drag::on_tile_drag;
 use layout::create_tile_position;
 
-const BOARD_COLOR: Srgba = BLACK;
+const BOARD_COLOR: Srgba = GRAY;
+const LETTER_COLOR: Srgba = BLACK;
 const TILE_COLOR: Srgba = WHITE;
 
 #[derive(Component)]
@@ -106,7 +106,7 @@ fn spawn_word_tile(
                 font_size: 14.,
                 ..default()
             },
-            TextColor(Color::from(BOARD_COLOR)),
+            TextColor(Color::from(LETTER_COLOR)),
         ))
         .observe(tile_drag_start)
         .observe(on_tile_drag)
