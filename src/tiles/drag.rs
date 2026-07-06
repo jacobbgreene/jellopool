@@ -2,6 +2,11 @@ use super::{TileMotion, WordTile};
 use crate::board::BoardLayout;
 use bevy::prelude::*;
 
+const Z_TOP: f32 = 10.;
+const SELECTED_SCALE: f32 = 1.09;
+const DEFAULT_SCALE: f32 = 1.;
+const DROPPED_Z: f32 = 2.;
+
 pub fn on_tile_drag(
     event: On<Pointer<Drag>>,
     mut tiles_query: Query<(Entity, &WordTile, &mut TileMotion, &mut Transform)>,
@@ -21,4 +26,34 @@ pub fn on_tile_drag(
         motion.target + Vec2::new(event.delta.x, -event.delta.y),
         tile.size,
     );
+}
+
+pub fn tile_drag_start(
+    event: On<Pointer<DragStart>>,
+    mut tiles_query: Query<(&mut TileMotion, &mut Transform)>,
+) {
+    let Ok((mut motion, mut transform)) = tiles_query.get_mut(event.entity) else {
+        println!(
+            "Failed to get either the entity, motion, or transform for {:?}",
+            event.entity,
+        );
+        return;
+    };
+    motion.target_scale = SELECTED_SCALE;
+    transform.translation.z = Z_TOP;
+}
+
+pub fn tile_drag_end(
+    event: On<Pointer<DragEnd>>,
+    mut tiles_query: Query<(&mut TileMotion, &mut Transform)>,
+) {
+    let Ok((mut motion, mut transform)) = tiles_query.get_mut(event.entity) else {
+        println!(
+            "Failed to get either the entity, motion, or transform for {:?}",
+            event.entity,
+        );
+        return;
+    };
+    motion.target_scale = DEFAULT_SCALE;
+    transform.translation.z = DROPPED_Z;
 }
