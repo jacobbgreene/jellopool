@@ -3,7 +3,9 @@ use crate::board::BoardLayout;
 use bevy::prelude::*;
 
 const Z_TOP: f32 = 10.;
-const SELECTED_SCALE: f32 = 1.3;
+const ON_BOARD_SCALE: f32 = 1.09;
+const ON_TRAY_SCALE: f32 = 1.3;
+
 const DEFAULT_SCALE: f32 = 1.;
 const DROPPED_Z: f32 = 2.;
 
@@ -39,7 +41,7 @@ pub fn tile_drag_start(
         );
         return;
     };
-    motion.target_scale = SELECTED_SCALE;
+    motion.target_scale = ON_TRAY_SCALE;
     transform.translation.z = Z_TOP;
 }
 

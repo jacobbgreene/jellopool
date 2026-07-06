@@ -5,6 +5,7 @@ use crate::tiles::drag::{tile_drag_end, tile_drag_start};
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
 use bevy::color::palettes::basic::{BLACK, WHITE};
 use bevy::prelude::*;
+use bevy::render::render_resource::ShaderType;
 use drag::on_tile_drag;
 use layout::create_tile_position;
 
@@ -119,5 +120,7 @@ pub fn move_tiles(time: Res<Time>, mut tiles: Query<(&TileMotion, &mut Transform
     for (motion, mut transform) in &mut tiles {
         transform.translation.x += (motion.target.x - transform.translation.x) * ease;
         transform.translation.y += (motion.target.y - transform.translation.y) * ease;
+        let scale = transform.scale.x + (motion.target_scale - transform.scale.x) * ease;
+        transform.scale = Vec3::new(scale, scale, 1.0);
     }
 }
