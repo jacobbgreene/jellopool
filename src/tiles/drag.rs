@@ -3,7 +3,7 @@ use crate::board::BoardLayout;
 use bevy::prelude::*;
 
 const Z_TOP: f32 = 10.;
-const SELECTED_SCALE: f32 = 1.09;
+const SELECTED_SCALE: f32 = 1.3;
 const DEFAULT_SCALE: f32 = 1.;
 const DROPPED_Z: f32 = 2.;
 

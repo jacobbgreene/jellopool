@@ -4,7 +4,6 @@ use crate::states::AppState;
 use crate::tiles::drag::{tile_drag_end, tile_drag_start};
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
 use bevy::color::palettes::basic::{BLACK, WHITE};
-use bevy::ecs::system::entity_command::observe;
 use bevy::prelude::*;
 use drag::on_tile_drag;
 use layout::create_tile_position;
@@ -108,8 +107,8 @@ fn spawn_word_tile(
             },
             TextColor(Color::from(BOARD_COLOR)),
         ))
-        .observe(on_tile_drag)
         .observe(tile_drag_start)
+        .observe(on_tile_drag)
         .observe(tile_drag_end);
 }
 
