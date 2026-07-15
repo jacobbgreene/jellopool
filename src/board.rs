@@ -1,6 +1,6 @@
 use crate::states::AppState::Playing;
 use bevy::color::palettes::basic::BLACK;
-use bevy::prelude::*;
+use bevy::{prelude::*, window};
 
 #[derive(Resource)]
 pub(crate) struct BoardLayout {
@@ -22,6 +22,7 @@ pub fn spawn_board(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    window_query: Query<&Window>,
 ) {
     commands.spawn((Name::new("Camera"), Camera2d));
     commands.spawn((
@@ -30,8 +31,16 @@ pub fn spawn_board(
         Mesh2d(meshes.add(Rectangle::default())),
         MeshMaterial2d(materials.add(Color::from(BLACK))),
     ));
+
+    let Ok(window) = window_query.single() else {
+        return;
+    };
+
+    let width = (window.width() / 2.) as f32;
+    let height = (window.height() / 2.) as f32;
+
     commands.insert_resource(BoardLayout {
-        min: Vec2::new(-2000., -2000.),
-        max: Vec2::new(2000., 2000.),
+        min: Vec2::new(-width, -height),
+        max: Vec2::new(width, height),
     });
 }
