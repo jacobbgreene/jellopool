@@ -40,10 +40,10 @@ pub fn spawn_all_tiles(
     };
 
     let selected_words = select_words(spawned_word_bank);
+    let mut tile_position: (f32, f32);
 
     let mut word_tile_collection: Vec<(WordTile, TileMotion)> = Vec::new();
     for (i, word) in selected_words.iter().enumerate() {
-        let tile_position: (f32, f32);
         if i % 6 == 0 {
             tile_position = create_tile_position(i, -800., 0, word.len());
         } else {
@@ -91,7 +91,7 @@ fn spawn_word_tile(
             DespawnOnExit(AppState::Playing),
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10 + 2) as f32, 27.))),
             MeshMaterial2d(materials.add(Color::from(BOARD_COLOR))),
-            Transform::from_xyz(word_tile.size.x.clone(), word_tile.size.y.clone(), 2.),
+            Transform::from_xyz(word_tile.size.x, word_tile.size.y, 2.),
             word_tile,
             motion,
         ))

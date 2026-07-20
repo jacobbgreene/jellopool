@@ -45,7 +45,7 @@ pub(crate) fn select_words(word_bank: &WordBank) -> Vec<String> {
     }
 
     selected_words.shuffle(&mut rng);
-    return selected_words;
+    selected_words
 }
 
 pub fn switch_to_playing_state(

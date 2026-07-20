@@ -1,6 +1,6 @@
 use crate::states::AppState::Playing;
 use bevy::color::palettes::basic::BLACK;
-use bevy::{prelude::*, window};
+use bevy::prelude::*;
 
 #[derive(Resource)]
 pub(crate) struct BoardLayout {
@@ -36,8 +36,8 @@ pub fn spawn_board(
         return;
     };
 
-    let width = (window.width() / 2.) as f32;
-    let height = (window.height() / 2.) as f32;
+    let width = window.width() / 2.;
+    let height = window.height() / 2.;
 
     commands.insert_resource(BoardLayout {
         min: Vec2::new(-width, -height),

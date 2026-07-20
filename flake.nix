@@ -27,7 +27,7 @@
           mkShell {
             buildInputs =
               [
-                (rust-bin.stable.latest.default.override { extensions = [ "rust-src" ]; })
+                (rust-bin.stable.latest.default.override { extensions = [ "rust-src" "rust-analyzer" ]; })
                 pkg-config
                 gcc
                 claude-code
