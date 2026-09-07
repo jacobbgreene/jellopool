@@ -36,8 +36,8 @@ pub fn spawn_board(
         return;
     };
 
-    let width = window.width() / 2.;
-    let height = window.height() / 2.;
+    let width = window.width();
+    let height = window.height();
 
     commands.insert_resource(BoardLayout {
         min: Vec2::new(-width, -height),

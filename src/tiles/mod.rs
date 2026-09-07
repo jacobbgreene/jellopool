@@ -15,8 +15,7 @@ const TILE_COLOR: Srgba = WHITE;
 #[derive(Component)]
 pub struct WordTile {
     unique_word: String,
-    //size has the x and y positions for the tile
-    size: Vec2,
+    position: Vec2,
 }
 
 #[derive(Component)]
@@ -51,12 +50,12 @@ pub fn spawn_all_tiles(
                 continue;
             };
             let prev_word_len = last_tile.unique_word.len();
-            let prev_word_pos_x = last_tile.size.x;
+            let prev_word_pos_x = last_tile.position.x;
             tile_position = create_tile_position(i, prev_word_pos_x, prev_word_len, word.len());
         }
         let tile = WordTile {
             unique_word: String::from(word),
-            size: Vec2::new(tile_position.0, tile_position.1),
+            position: Vec2::new(tile_position.0, tile_position.1),
         };
         let motion = TileMotion {
             target: Vec2::new(tile_position.0, tile_position.1),
@@ -91,7 +90,7 @@ fn spawn_word_tile(
             DespawnOnExit(AppState::Playing),
             Mesh2d(meshes.add(Rectangle::new((&word.len() * 10 + 2) as f32, 27.))),
             MeshMaterial2d(materials.add(Color::from(BOARD_COLOR))),
-            Transform::from_xyz(word_tile.size.x, word_tile.size.y, 2.),
+            Transform::from_xyz(word_tile.position.x, word_tile.position.y, 2.),
             word_tile,
             motion,
         ))

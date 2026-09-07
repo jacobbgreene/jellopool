@@ -2,22 +2,19 @@
   description = "bevy flake";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
   outputs =
     {
       nixpkgs,
-      rust-overlay,
       flake-utils,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
-          inherit system overlays;
+          inherit system;
           config.allowUnfree = true;
         };
       in
@@ -25,9 +22,12 @@
         devShells.default =
           with pkgs;
           mkShell {
+            # Rust toolchain (incl. rust-analyzer + rust-src) comes from the
+            # system config (rust-overlay), not pinned here, so rust-analyzer
+            # always matches rustc. This shell only supplies the Bevy system
+            # libraries + LD_LIBRARY_PATH the build/run needs.
             buildInputs =
               [
-                (rust-bin.stable.latest.default.override { extensions = [ "rust-src" "rust-analyzer" ]; })
                 pkg-config
                 gcc
                 claude-code
@@ -47,7 +47,6 @@
                 libxrandr
                 wayland
               ];
-            RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
             LD_LIBRARY_PATH = lib.makeLibraryPath [
               vulkan-loader
               libx11

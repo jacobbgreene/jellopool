@@ -26,7 +26,7 @@ pub fn on_tile_drag(
     //This shit just gives a corrected position, based on board layout and with easing
     motion.target = layout.clamp_tile(
         motion.target + Vec2::new(event.delta.x, -event.delta.y),
-        tile.size,
+        tile.position,
     );
 }
 
@@ -58,4 +58,18 @@ pub fn tile_drag_end(
     };
     motion.target_scale = DEFAULT_SCALE;
     transform.translation.z = DROPPED_Z;
+}
+
+pub fn push_tile(
+    event: On<Pointer<Drag>>,
+    mut colliding_tile: WordTile,
+    mut tiles_query: Query<(&mut TileMotion, &mut Transform)>,
+) {
+    let Ok((mut motion, mut transform)) = tiles_query.get_mut(event.entity) else {
+        println!(
+            "Failed to get either the entity, motion, or tranform for {:?}",
+            event.entity,
+        );
+        return;
+    };
 }
