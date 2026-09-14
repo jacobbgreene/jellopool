@@ -28,10 +28,6 @@
             # libraries + LD_LIBRARY_PATH the build/run needs.
             buildInputs =
               [
-<<<<<<< Updated upstream
-=======
-                (rust-bin.stable.latest.default.override { extensions = [ "rust-src" "rust-analyzer" ]; })
->>>>>>> Stashed changes
                 pkg-config
                 gcc
                 claude-code
