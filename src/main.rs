@@ -8,7 +8,7 @@ mod word_bank;
 use crate::{
     board::spawn_board,
     states::AppState,
-    tiles::{move_tiles, spawn_all_tiles},
+    tiles::{move_tiles, spawn_all_tiles, spawn_board_root},
     word_bank::{WordBank, load_word_bank, switch_to_playing_state},
 };
 use bevy::window::{MonitorSelection, WindowMode};
@@ -37,6 +37,9 @@ fn main() {
                 move_tiles.run_if(in_state(AppState::Playing)),
             ),
         )
-        .add_systems(OnEnter(AppState::Playing), spawn_all_tiles)
+        .add_systems(
+            OnEnter(AppState::Playing),
+            (spawn_all_tiles, spawn_board_root),
+        )
         .run();
 }

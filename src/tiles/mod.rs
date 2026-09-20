@@ -123,3 +123,45 @@ pub fn move_tiles(time: Res<Time>, mut tiles: Query<(&TileMotion, &mut Transform
         transform.scale = Vec3::new(scale, scale, 1.0);
     }
 }
+
+pub fn spawn_board_root(mut commands: Commands) {
+    commands
+        .spawn((
+            Name::new("board_root"),
+            BackgroundColor(Color::from(BOARD_COLOR)),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::End,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            DespawnOnExit(AppState::Playing),
+        ))
+        .with_child(get_writing_zone())
+        .with_child(get_board_tray());
+}
+
+pub fn get_board_tray() -> (Name, BackgroundColor, Node) {
+    let name = Name::new("board_tray");
+    let color = BackgroundColor(Color::from(LETTER_COLOR));
+    let node = Node {
+        width: Val::Percent(78.0),
+        height: Val::Percent(23.0),
+        ..default()
+    };
+
+    (name, color, node)
+}
+
+pub fn get_writing_zone() -> (Name, BackgroundColor, Node) {
+    let name = Name::new("writing_zone");
+    let color = BackgroundColor(Color::from(TILE_COLOR));
+    let node = Node {
+        width: Val::Percent(78.0),
+        height: Val::Percent(67.0),
+        ..default()
+    };
+    (name, color, node)
+}

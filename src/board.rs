@@ -18,29 +18,6 @@ impl BoardLayout {
     }
 }
 
-pub fn spawn_board(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    window_query: Query<&Window>,
-) {
+pub fn spawn_board(mut commands: Commands) {
     commands.spawn((Name::new("Camera"), Camera2d));
-    commands.spawn((
-        Name::new("Background"),
-        DespawnOnExit(Playing),
-        Mesh2d(meshes.add(Rectangle::default())),
-        MeshMaterial2d(materials.add(Color::from(BLACK))),
-    ));
-
-    let Ok(window) = window_query.single() else {
-        return;
-    };
-
-    let width = window.width();
-    let height = window.height();
-
-    commands.insert_resource(BoardLayout {
-        min: Vec2::new(-width, -height),
-        max: Vec2::new(width, height),
-    });
 }

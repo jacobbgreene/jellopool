@@ -1,3 +1,2 @@
-pub use crate::tiles::WordTile;
+pub use crate::{states::AppState, tiles::WordTile};
 pub use bevy::prelude::*;
-
