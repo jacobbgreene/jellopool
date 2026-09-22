@@ -38,6 +38,8 @@ fn main() {
                     tiles::tile_feel_system,
                     tiles::tray_gap_system,
                     tiles::tray_gap_anim_system,
+                    tiles::zone_snap_highlight_system,
+                    tiles::snap_anim_system,
                 )
                     .run_if(in_state(AppState::Playing)),
             ),

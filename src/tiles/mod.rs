@@ -1,14 +1,20 @@
 mod drag;
 use crate::states::AppState;
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
-use bevy::color::palettes::basic::{BLACK, GRAY, WHITE};
 use bevy::prelude::*;
 use drag::{on_tile_drag, tile_drag_end, tile_drag_start};
-pub use drag::{tile_feel_system, tile_follow_system, tray_gap_anim_system, tray_gap_system};
+pub use drag::{
+    snap_anim_system, tile_feel_system, tile_follow_system, tray_gap_anim_system, tray_gap_system,
+    zone_snap_highlight_system,
+};
 
-const BOARD_COLOR: Srgba = GRAY;
-const LETTER_COLOR: Srgba = BLACK;
-const TILE_COLOR: Srgba = WHITE;
+// === Literary palette: dim study, mahogany desk, aged paper, ink, brass ===
+const INK: Srgba            = Srgba::new(0.10, 0.07, 0.05, 1.0);  // warm near-black espresso ink
+const PARCHMENT: Srgba      = Srgba::new(0.95, 0.93, 0.86, 1.0);  // aged paper — the page
+const IVORY_TILE: Srgba     = Srgba::new(0.97, 0.96, 0.92, 1.0);  // tile face, slightly brighter
+const DESK_TRAY: Srgba      = Srgba::new(0.12, 0.09, 0.06, 1.0);  // dark mahogany blotter
+const BOARD_SURROUND: Srgba = Srgba::new(0.20, 0.18, 0.15, 1.0);  // dim desk surface
+const GILT_ACCENT: Srgba    = Srgba::new(0.55, 0.45, 0.30, 1.0);  // aged brass / book gold
 
 /// Marks the tray region so tile spawning can find it after the root spawns.
 #[derive(Component)]
@@ -34,7 +40,7 @@ pub fn spawn_board_root(mut commands: Commands) {
     commands
         .spawn((
             Name::new("board_root"),
-            BackgroundColor(Color::from(BOARD_COLOR)),
+            BackgroundColor(Color::from(BOARD_SURROUND)),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -71,7 +77,7 @@ pub fn get_drag_layer() -> (Name, DragLayer, Pickable, Node) {
 
 pub fn get_board_tray() -> (Name, BoardTray, BackgroundColor, Node) {
     let name = Name::new("board_tray");
-    let color = BackgroundColor(Color::from(LETTER_COLOR));
+    let color = BackgroundColor(Color::from(DESK_TRAY));
     let node = Node {
         width: Val::Percent(78.0),
         height: Val::Percent(23.0),
@@ -79,9 +85,10 @@ pub fn get_board_tray() -> (Name, BoardTray, BackgroundColor, Node) {
         flex_wrap: FlexWrap::Wrap,
         justify_content: JustifyContent::Center,
         align_content: AlignContent::Center,
-        row_gap: Val::Px(8.0),
-        column_gap: Val::Px(8.0),
-        padding: UiRect::all(Val::Px(12.0)),
+        row_gap: Val::Px(12.0),
+        column_gap: Val::Px(12.0),
+        padding: UiRect::all(Val::Px(20.0)),
+        border_radius: BorderRadius::all(Val::Px(6.0)),
         ..default()
     };
 
@@ -90,7 +97,7 @@ pub fn get_board_tray() -> (Name, BoardTray, BackgroundColor, Node) {
 
 pub fn get_writing_zone() -> (Name, WritingZone, BackgroundColor, Node) {
     let name = Name::new("writing_zone");
-    let color = BackgroundColor(Color::from(TILE_COLOR));
+    let color = BackgroundColor(Color::from(PARCHMENT));
     let node = Node {
         width: Val::Percent(78.0),
         // Takes all vertical space the tray doesn't reserve.
@@ -128,21 +135,22 @@ fn spawn_word_tile(tray: &mut ChildSpawnerCommands, word: &str) {
         },
         Node {
             // Padding + text size the tile; width is not derived from word length.
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-            border: UiRect::all(Val::Px(2.0)),
+            padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
+            border: UiRect::all(Val::Px(3.0)),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
             ..default()
         },
-        BorderColor::from(Color::from(BOARD_COLOR)),
-        BackgroundColor(Color::from(TILE_COLOR)),
+        BorderColor::from(Color::from(GILT_ACCENT)),
+        BackgroundColor(Color::from(IVORY_TILE)),
     ))
     // The text is decorative for picking: the outer tile is the drag target.
     .with_child((
         Text::new(word),
         TextFont {
-            font_size: FontSize::Px(14.0),
+            font_size: FontSize::Px(20.0),
             ..default()
         },
-        TextColor(Color::from(LETTER_COLOR)),
+        TextColor(Color::from(INK)),
         Pickable::IGNORE,
     ))
     .observe(tile_drag_start)
