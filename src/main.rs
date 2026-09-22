@@ -8,11 +8,15 @@ mod word_bank;
 use crate::{
     board::spawn_board,
     states::AppState,
-    tiles::{spawn_all_tiles, spawn_board_root},
+    tiles::{spawn_all_tiles, spawn_board_root, GameFont},
     word_bank::{WordBank, load_word_bank, switch_to_playing_state},
 };
 use bevy::window::{MonitorSelection, WindowMode};
 use bevy_common_assets::ron::RonAssetPlugin;
+
+fn load_game_font(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(GameFont(asset_server.load("fonts/EBGaramond-Regular.ttf")));
+}
 
 fn main() {
     App::new()
@@ -28,7 +32,7 @@ fn main() {
             RonAssetPlugin::<WordBank>::new(&["ron"]),
         ))
         .init_state::<AppState>()
-        .add_systems(Startup, (spawn_board, load_word_bank))
+        .add_systems(Startup, (spawn_board, load_word_bank, load_game_font))
         .add_systems(
             Update,
             (

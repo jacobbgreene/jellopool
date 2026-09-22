@@ -8,6 +8,10 @@ pub use drag::{
     zone_snap_highlight_system,
 };
 
+/// Handle to the literary typeface used for tile text.
+#[derive(Resource)]
+pub struct GameFont(pub Handle<Font>);
+
 // === Literary palette: dim study, mahogany desk, aged paper, ink, brass ===
 const INK: Srgba            = Srgba::new(0.10, 0.07, 0.05, 1.0);  // warm near-black espresso ink
 const PARCHMENT: Srgba      = Srgba::new(0.95, 0.93, 0.86, 1.0);  // aged paper — the page
@@ -112,6 +116,7 @@ pub fn spawn_all_tiles(
     tray: Single<Entity, With<BoardTray>>,
     word_bank_handle: Res<WordBankHandle>,
     word_banks: Res<Assets<WordBank>>,
+    font: Res<GameFont>,
 ) {
     let Some(spawned_word_bank) = word_banks.get(&word_bank_handle.0) else {
         return;
@@ -122,12 +127,12 @@ pub fn spawn_all_tiles(
     // The tray arranges the tiles; there are no positions to compute.
     commands.entity(*tray).with_children(|tray| {
         for word in &selected_words {
-            spawn_word_tile(tray, word);
+            spawn_word_tile(tray, word, font.0.clone());
         }
     });
 }
 
-fn spawn_word_tile(tray: &mut ChildSpawnerCommands, word: &str) {
+fn spawn_word_tile(tray: &mut ChildSpawnerCommands, word: &str, font: Handle<Font>) {
     tray.spawn((
         Name::new(word.to_string()),
         WordTile {
@@ -147,6 +152,7 @@ fn spawn_word_tile(tray: &mut ChildSpawnerCommands, word: &str) {
     .with_child((
         Text::new(word),
         TextFont {
+            font: FontSource::Handle(font),
             font_size: FontSize::Px(20.0),
             ..default()
         },
