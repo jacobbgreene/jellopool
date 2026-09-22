@@ -32,72 +32,85 @@ a `Camera2d`, positioned in pixels by hand. Bevy UI is a different system:
   `position_type: Absolute` opt out and place themselves.
 - Paint order comes from spawn order (later = on top) or explicit `ZIndex`.
 
-## Step 1: Remove mesh rendering
+## Step 1: Remove mesh rendering — **PARTIALLY DONE**
 
-**Do:**
+**Status:** Old mesh tile spawning still active; `BoardLayout` still exists.
 
-- In `src/board.rs`: keep only the persistent `Camera2d` in `Startup`. Delete
-  `BoardLayout` and its `Window` query — UI bounds come from measured nodes
-  later (step 6), not window math.
+**Already done:**
+
+- `spawn_board_root` in `src/tiles/mod.rs` replaces the old mesh background
+  with a UI root.
+- `get_writing_zone()` and `get_board_tray()` exist as UI regions.
+
+**Still to remove:**
+
+- In `src/board.rs`: delete `BoardLayout` and its `Window` query — UI bounds
+  come from measured nodes later (step 6), not window math.
 - In `src/tiles/mod.rs`: delete the mesh/material/`Transform` pieces of
-  `spawn_word_tile` and `TileMotion`, `move_tiles`, and the mesh imports
+  `spawn_word_tile`, `TileMotion`, `move_tiles`, and the mesh imports
   (`Mesh2d`, `MeshMaterial2d`, `ColorMaterial`, `Text2d`).
 - In `src/main.rs`: remove `move_tiles` from `Update`.
-- Leave `spawn_all_tiles`'s call to `select_words` untouched — it already
-  supplies 40 random words, and word selection does not change.
-- `src/tiles/layout.rs` and its `create_tile_position`: keep for now if you
-  want the app compiling step-by-step; delete it when the last caller is gone
-  (its centered-world math has no place in UI).
+- `src/tiles/layout.rs` and its `create_tile_position`: delete when the last
+  caller is gone (its centered-world math has no place in UI).
 
-**Learn:** this is intentionally a deletion-only step. Resist replacing
-anything yet — the goal is to make the mesh path *gone* so the UI tree you
-build next is the only board, not a parallel one.
+**Temporary coexistence:** the old mesh tiles currently spawn alongside the
+new UI regions. This is expected during the cutover. The mesh tiles will be
+replaced by UI tiles in Step 4.
 
 **Done when:** `cargo check` shows no mesh-rendering types remain in
 `board.rs` / `tiles/` (temporary dead-code warnings on `WordTile` are fine).
 
-## Step 2: Spawn the full-screen root with a background
+## Step 2: Spawn the full-screen root with a background — **DONE**
 
-**Do:**
+**Status:** Complete as of the current implementation.
 
-- Add a system (e.g. `spawn_board_root`) registered with
-  `OnEnter(AppState::Playing)` — **not** `Startup`.
-- Spawn one root entity carrying:
-  - `Name::new("BoardRoot")`
+**Implemented in `src/tiles/mod.rs:127`:**
+
+- `spawn_board_root` spawns the root entity with:
+  - `Name::new("board_root")`
   - `DespawnOnExit(AppState::Playing)`
   - `Node` sized `Val::Percent(100.0)` in both dimensions
-  - a deliberate `BackgroundColor`
-- Run the app. You should see a solid full-screen color.
+  - `BackgroundColor(Color::from(BOARD_COLOR))`
+- Registered in `src/main.rs` with `OnEnter(AppState::Playing)` alongside
+  `spawn_all_tiles`.
 
-**Learn:**
+**Why this structure matters:**
 
-- *Why `OnEnter(Playing)` instead of `Startup`:* the root owns
-  `DespawnOnExit(Playing)`, so leaving the state destroys it. Spawning at
-  `Startup` would mean the first entry works but every later re-entry has no
-  board. `OnEnter` guarantees a fresh root per entry, beneath the same
-  persistent camera (which is why the camera must **not** get
+- The root owns `DespawnOnExit(Playing)`, so leaving the state destroys it.
+  Spawning at `Startup` would mean the first entry works but every later
+  re-entry has no board. `OnEnter` guarantees a fresh root per entry, beneath
+  the same persistent camera (which is why the camera must **not** get
   `DespawnOnExit`).
-- *Why no `Window` query:* your old stub read `window.width()/height()` to
-  size things. UI nodes sized in `Val::Percent` are recomputed by the layout
-  engine every frame; querying the window re-introduces exactly the stale
-  world-space thinking this migration removes.
-- *Minimal shape:* a Bevy UI entity is just
-  `commands.spawn((Node { .. }, BackgroundColor(..)))` — a bundle of plain
-  components, like mesh entities but with `Node` where `Transform` used to be.
+- No `Window` query: UI nodes sized in `Val::Percent` are recomputed by the
+  layout engine every frame; querying the window re-introduces exactly the
+  stale world-space thinking this migration removes.
+- A Bevy UI entity is just `commands.spawn((Node { .. }, BackgroundColor(..)))`
+  — a bundle of plain components, like mesh entities but with `Node` where
+  `Transform` used to be.
 
-**Done when:** the app shows your background color full-screen on entering
-`Playing`, with no window-size code involved.
+**Verified:** the app shows a full-screen background on entering `Playing`,
+with no window-size code involved.
 
-## Step 3: Build the region tree
+## Step 3: Build the region tree — **IN PROGRESS**
 
-**Do:** add children under the root (`.with_children(...)`), in this order:
+**Status:** Composition and tray exist; drag layer and tray layout rules are next.
 
-1. a **composition region** — the open area where placed tiles will live;
-2. a **tray region** — a flex row with `flex_wrap: Wrap`, a `gap`, and
-   `padding`;
-3. a **drag layer** — an absolutely positioned node covering the screen, above
-   both regions, with `Pickable::IGNORE` on the container so it never blocks
-   pointer targeting of tiles underneath.
+**Already implemented in `src/tiles/mod.rs`:**
+
+- `spawn_board_root` attaches two children via `.with_child(...)`:
+  - `get_writing_zone()` — the composition region (`Name::new("writing_zone")`)
+  - `get_board_tray()` — the tray region (`Name::new("board_tray")`)
+- The root's `Node` uses `FlexDirection::Column`, `JustifyContent::End`, and
+  `AlignItems::Center` to stack the regions vertically and center them.
+
+**Remaining work:**
+
+1. Give the tray its own layout rules — it should be a flex row with
+   `flex_wrap: Wrap`, a `gap`, and `padding`. These go in the tray's `Node`,
+   not the root's.
+2. Add the **drag layer** — an absolutely positioned node covering the screen,
+   above both regions, with `Pickable::IGNORE` on the container so it never
+   blocks pointer targeting of tiles underneath.
 
 **Learn:**
 
@@ -112,10 +125,12 @@ build next is the only board, not a parallel one.
   `create_tile_position`. You will not compute tile positions for idle tiles
   at all — the tray arranges them, which is why varied word lengths wrap for
   free.
+- *Root layout vs. tray layout:* the root's column layout positions the
+  writing zone and tray. The tray's own horizontal wrapping layout will
+  arrange word tiles inside it.
 
-**Done when:** the regions are visible (give them temporary distinct
-background colors while building — remove later), tray sits where you want it,
-composition fills the rest.
+**Done when:** the drag layer exists and the tray has flex-row wrapping
+configured; the regions remain visible with temporary distinct colors.
 
 ## Step 4: Spawn words as UI tiles
 

@@ -8,7 +8,7 @@ mod word_bank;
 use crate::{
     board::spawn_board,
     states::AppState,
-    tiles::{move_tiles, spawn_all_tiles, spawn_board_root},
+    tiles::{spawn_all_tiles, spawn_board_root},
     word_bank::{WordBank, load_word_bank, switch_to_playing_state},
 };
 use bevy::window::{MonitorSelection, WindowMode};
@@ -25,7 +25,6 @@ fn main() {
                 }),
                 ..default()
             }),
-            MeshPickingPlugin,
             RonAssetPlugin::<WordBank>::new(&["ron"]),
         ))
         .init_state::<AppState>()
@@ -34,12 +33,19 @@ fn main() {
             Update,
             (
                 switch_to_playing_state.run_if(in_state(AppState::Loading)),
-                move_tiles.run_if(in_state(AppState::Playing)),
+                (
+                    tiles::tile_follow_system,
+                    tiles::tile_feel_system,
+                    tiles::tray_gap_system,
+                    tiles::tray_gap_anim_system,
+                )
+                    .run_if(in_state(AppState::Playing)),
             ),
         )
+        // Chained so the root (and its tray) exist before tiles spawn into it.
         .add_systems(
             OnEnter(AppState::Playing),
-            (spawn_all_tiles, spawn_board_root),
+            (spawn_board_root, spawn_all_tiles).chain(),
         )
         .run();
 }

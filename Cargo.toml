@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.18.1"
-bevy_common_assets = { version = "0.16.0", features = ["ron"] }
+bevy = "0.19"
+bevy_common_assets = { version = "0.17.0", features = ["ron"] }
 hashbrown = "0.17.1"
 rand = "0.10.1"
 random_word = { version = "0.5.2", features = ["en"] }
