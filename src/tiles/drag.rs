@@ -1,8 +1,9 @@
+use super::placement::{TileRect, plan};
 use super::{BoardTray, WordTile, WritingZone};
 use bevy::prelude::*;
 
-/// Eased follow speed for the dragged tile trailing the pointer.
-const FOLLOW_SPEED: f32 = 28.0;
+/// Ease speed for neighboring tiles sliding during drag previews.
+const PUSH_SPEED: f32 = 28.0;
 /// Ease speed for pickup/drop scale and shadow.
 const FEEL_SPEED: f32 = 16.0;
 /// Ease speed for tray gaps opening/closing.
@@ -17,10 +18,11 @@ const SNAP_DURATION: f32 = 0.16;
 /// Ease speeds for the snap highlight's position, size, and fade.
 const HIGHLIGHT_POS_SPEED: f32 = 22.0;
 const HIGHLIGHT_FADE_SPEED: f32 = 12.0;
-/// Snap highlight accent: warm amber lamplight that reads beautifully on
-/// the parchment writing zone. Alpha scales with fade intensity.
-const HIGHLIGHT_FILL: Srgba = Srgba::new(0.60, 0.48, 0.28, 0.12);
-const HIGHLIGHT_BORDER: Srgba = Srgba::new(0.60, 0.48, 0.28, 0.55);
+/// Snap highlight accent: vermilion #C44732, the palette's sole accent,
+/// reserved for the active landing preview over the paper writing zone.
+/// Alpha scales with fade intensity.
+const HIGHLIGHT_FILL: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.12);
+const HIGHLIGHT_BORDER: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.55);
 
 /// Per-frame eased "juice" for a tile: visual scale and shadow intensity.
 /// Inserted on drag start, removed once the drop animation settles.
@@ -34,8 +36,7 @@ pub struct TileFeel {
 }
 
 /// Present only on the tile currently being dragged. The tile's `Node`
-/// offset eases toward `target` every frame instead of snapping, which is
-/// what makes the drag feel smooth rather than rigid.
+/// offset follows `target` directly every frame.
 #[derive(Component)]
 pub struct DragFollow {
     /// Pointer position minus tile top-left at grab time (logical units),
@@ -43,11 +44,13 @@ pub struct DragFollow {
     grab_offset: Vec2,
     /// Where the tile's top-left should be right now (logical units).
     target: Vec2,
-    /// Latest pointer position in physical pixels, for region hit tests.
+    /// Latest pointer position in physical viewport pixels, for region hit tests.
     pointer: Vec2,
     /// The grid cell the tile would snap to if dropped right now
     /// (writing-zone-relative logical units), while hovering the zone.
     snap_target: Option<Vec2>,
+    origin: Option<Vec2>,
+    tray_index: usize,
 }
 
 /// Invisible spacer that reserves room in the tray for the dragged tile.
@@ -84,9 +87,47 @@ pub struct SnapAnim {
     t: f32,
 }
 
+/// Authoritative zone-relative position, never changed by preview animation.
+#[derive(Component)]
+pub struct PlacedTile(pub Vec2);
+
+fn placement_at(
+    entity: Entity,
+    pointer: Vec2,
+    grab_offset: Vec2,
+    size: Vec2,
+    zone: (&ComputedNode, &UiGlobalTransform),
+    committed: &[TileRect],
+) -> Option<(Vec2, Vec<TileRect>)> {
+    let (node, transform) = zone;
+    if !node.contains_point(*transform, pointer) {
+        return None;
+    }
+    let inv = node.inverse_scale_factor;
+    let bounds = node.size * inv;
+    if size.cmpgt(bounds).any() {
+        return None;
+    }
+    let top_left = (transform.translation - node.size * 0.5) * inv;
+    let cell = snap_to_grid(pointer * inv - grab_offset - top_left, bounds - size);
+    plan(
+        TileRect {
+            entity,
+            pos: cell,
+            size,
+        },
+        committed,
+        bounds,
+    )
+    .map(|plan| (cell, plan))
+}
+
 fn shadow(intensity: f32) -> BoxShadow {
     BoxShadow::new(
-        Color::srgba(0.08, 0.05, 0.03, 0.35 * intensity),
+        // Neutral-warm gray, retuned for the light paper surround: the old
+        // near-black mix was tuned against a dark desk and reads muddy here.
+        // Alpha structure and geometry are unchanged.
+        Color::srgba(0.16, 0.15, 0.13, 0.35 * intensity),
         Val::Px(0.0),
         Val::Px(6.0 * intensity),
         Val::Px(2.0 * intensity),
@@ -108,7 +149,7 @@ fn ease_factor(speed: f32, dt: f32) -> f32 {
 /// Round a position to the nearest grid cell, clamped to the usable area.
 fn snap_to_grid(pos: Vec2, max: Vec2) -> Vec2 {
     let snapped = (pos / GRID_CELL).round() * GRID_CELL;
-    snapped.clamp(Vec2::ZERO, max)
+    snapped.clamp(Vec2::ZERO, (max / GRID_CELL).floor() * GRID_CELL)
 }
 
 /// Ease-out with a slight overshoot — the "click" into place.
@@ -118,17 +159,70 @@ fn ease_out_back(t: f32) -> f32 {
     1.0 + C3 * (t - 1.0).powi(3) + C1 * (t - 1.0).powi(2)
 }
 
+/// Picking locations are logical render-target coordinates, but UI geometry is
+/// physical and viewport-relative. UiScale belongs only in the later conversion
+/// via ComputedNode::inverse_scale_factor, not in this conversion.
+fn pointer_in_viewport(
+    position: Vec2,
+    target: &ComputedUiTargetCamera,
+    cameras: &Query<&Camera>,
+) -> Option<Vec2> {
+    let converted = target.get().and_then(|entity| {
+        let camera = cameras.get(entity).ok()?;
+        let scale = camera.target_scaling_factor()?;
+        let viewport = camera.physical_viewport_rect()?;
+        Some(position * scale - viewport.min.as_vec2())
+    });
+    if converted.is_none() {
+        // Never guess DPI from the UI scale or treat logical input as physical.
+        // Ignore this event until camera geometry is ready; Escape still cancels.
+        warn!("Ignoring tile drag event: UI target camera geometry is unavailable");
+    }
+    converted
+}
+
 /// On grab: move the tile into the drag layer without it visibly jumping,
 /// and start the float animation (slight grow + shadow fade-in).
 pub fn tile_drag_start(
     event: On<Pointer<DragStart>>,
     mut commands: Commands,
     drag_layer: Single<Entity, With<super::DragLayer>>,
-    mut tiles: Query<(&ComputedNode, &UiGlobalTransform, &mut Node), With<WordTile>>,
+    cameras: Query<&Camera>,
+    mut tiles: Query<
+        (
+            &ComputedNode,
+            &ComputedUiTargetCamera,
+            &UiGlobalTransform,
+            &mut Node,
+            Option<&PlacedTile>,
+        ),
+        With<WordTile>,
+    >,
+    active: Query<Entity, With<DragFollow>>,
+    tray: Single<&Children, With<BoardTray>>,
+    snapping: Query<Entity, (With<PlacedTile>, With<SnapAnim>)>,
 ) {
-    let Ok((computed, transform, mut node)) = tiles.get_mut(event.entity) else {
+    if !active.is_empty() {
+        return;
+    }
+    let tray_index = tray
+        .iter()
+        .take_while(|child| *child != event.entity)
+        .filter(|child| tiles.contains(*child))
+        .count();
+    let Ok((computed, camera, transform, mut node, placed)) = tiles.get_mut(event.entity) else {
         return;
     };
+
+    let Some(pointer) = pointer_in_viewport(event.pointer_location.position, camera, &cameras)
+    else {
+        return;
+    };
+
+    // Hand any in-flight drop animation to the preview writer.
+    for entity in &snapping {
+        commands.entity(entity).remove::<SnapAnim>();
+    }
 
     // UiGlobalTransform is the node's center in physical viewport pixels;
     // convert to a logical top-left offset for the drag layer, which
@@ -140,7 +234,7 @@ pub fn tile_drag_start(
     node.left = Val::Px(top_left.x);
     node.top = Val::Px(top_left.y);
 
-    let pointer_logical = event.pointer_location.position * inv;
+    let pointer_logical = pointer * inv;
 
     commands
         .entity(event.entity)
@@ -149,8 +243,10 @@ pub fn tile_drag_start(
         .insert(DragFollow {
             grab_offset: pointer_logical - top_left,
             target: top_left,
-            pointer: event.pointer_location.position,
+            pointer,
             snap_target: None,
+            origin: placed.map(|placed| placed.0),
+            tray_index,
         })
         .insert(TileFeel {
             scale: 1.0,
@@ -161,19 +257,23 @@ pub fn tile_drag_start(
 }
 
 /// While dragging: update where the tile should be. The follow system
-/// eases the actual offset toward this target.
+/// applies the actual offset directly to this target.
 pub fn on_tile_drag(
     event: On<Pointer<Drag>>,
-    mut tiles: Query<(&ComputedNode, &mut DragFollow), With<WordTile>>,
+    cameras: Query<&Camera>,
+    mut tiles: Query<(&ComputedNode, &ComputedUiTargetCamera, &mut DragFollow), With<WordTile>>,
 ) {
-    let Ok((computed, mut follow)) = tiles.get_mut(event.entity) else {
+    let Ok((computed, camera, mut follow)) = tiles.get_mut(event.entity) else {
         return;
     };
 
-    // Pointer positions are physical pixels; logical UI units differ at
-    // non-default DPI or UiScale.
+    let Some(pointer) = pointer_in_viewport(event.pointer_location.position, camera, &cameras)
+    else {
+        return;
+    };
+    // Convert physical viewport pixels to logical UI units (including UiScale).
     let inv = computed.inverse_scale_factor;
-    follow.pointer = event.pointer_location.position;
+    follow.pointer = pointer;
     follow.target = follow.pointer * inv - follow.grab_offset;
 }
 
@@ -182,13 +282,16 @@ pub fn on_tile_drag(
 /// into the gap the tray is currently previewing, if there is one.
 pub fn tile_drag_end(
     event: On<Pointer<DragEnd>>,
+    cameras: Query<&Camera>,
     mut commands: Commands,
     tray: Single<(Entity, &Children), With<BoardTray>>,
     gaps: Query<(Entity, &TrayGap)>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
+    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
     mut tiles: Query<
         (
             &ComputedNode,
+            &ComputedUiTargetCamera,
             &UiGlobalTransform,
             Option<&DragFollow>,
             &mut Node,
@@ -196,13 +299,36 @@ pub fn tile_drag_end(
         With<WordTile>,
     >,
 ) {
-    let Ok((computed, transform, follow, mut node)) = tiles.get_mut(event.entity) else {
+    let Ok((computed, camera, transform, follow, mut node)) = tiles.get_mut(event.entity) else {
         return;
     };
     let (zone_entity, zone_node, zone_transform) = zone.into_inner();
     let (tray_entity, tray_children) = tray.into_inner();
 
-    let snap_target = follow.and_then(|follow| follow.snap_target);
+    let Some(follow) = follow else {
+        return;
+    };
+    let Some(pointer) = pointer_in_viewport(event.pointer_location.position, camera, &cameras)
+    else {
+        return;
+    };
+    let committed: Vec<_> = placed
+        .iter()
+        .filter(|(entity, _, _)| *entity != event.entity)
+        .map(|(entity, pos, node)| TileRect {
+            entity,
+            pos: pos.0,
+            size: node.size * node.inverse_scale_factor,
+        })
+        .collect();
+    let placement = placement_at(
+        event.entity,
+        pointer,
+        follow.grab_offset,
+        computed.size * computed.inverse_scale_factor,
+        (zone_node, zone_transform),
+        &committed,
+    );
 
     // Start the settle animation; the shadow fades out via TileFeel.
     commands
@@ -215,7 +341,7 @@ pub fn tile_drag_end(
             shadow_target: 0.0,
         });
 
-    if zone_node.contains_point(*zone_transform, event.pointer_location.position) {
+    if let Some((to, plan)) = placement {
         // Keep the tile where it appears on screen, expressed as an offset
         // from the writing zone's top-left, then play the snap into the
         // highlighted cell.
@@ -228,11 +354,12 @@ pub fn tile_drag_end(
         // clamps against a zeroed range rather than an inverted one.
         let max = ((zone_node.size - computed.size) * inv).max(Vec2::ZERO);
         let from = relative.clamp(Vec2::ZERO, max);
-        // Prefer the cell the highlight is showing; fall back to snapping
-        // the release position directly.
-        let to = snap_target
-            .unwrap_or_else(|| snap_to_grid(from, max))
-            .clamp(Vec2::ZERO, max);
+        for tile in plan {
+            commands
+                .entity(tile.entity)
+                .remove::<SnapAnim>()
+                .insert(PlacedTile(tile.pos));
+        }
 
         node.position_type = PositionType::Absolute;
         node.left = Val::Px(from.x);
@@ -241,8 +368,10 @@ pub fn tile_drag_end(
         commands
             .entity(event.entity)
             .insert(ChildOf(zone_entity))
+            .insert(PlacedTile(to))
             .insert(SnapAnim { from, to, t: 0.0 });
     } else {
+        commands.entity(event.entity).remove::<PlacedTile>();
         // Back to the tray: rejoin normal flex layout and let it reflow.
         node.position_type = PositionType::Relative;
         node.left = Val::Auto;
@@ -278,17 +407,11 @@ pub fn tile_drag_end(
     }
 }
 
-/// Eases a dragged tile's offset toward its pointer-derived target.
-pub fn tile_follow_system(
-    time: Res<Time>,
-    mut tiles: Query<(&DragFollow, &mut Node), With<WordTile>>,
-) {
-    let ease = ease_factor(FOLLOW_SPEED, time.delta_secs());
+/// Applies a dragged tile's pointer-derived target directly each frame.
+pub fn tile_follow_system(mut tiles: Query<(&DragFollow, &mut Node), With<WordTile>>) {
     for (follow, mut node) in &mut tiles {
-        let left = px_or_zero(node.left);
-        let top = px_or_zero(node.top);
-        node.left = Val::Px(left + (follow.target.x - left) * ease);
-        node.top = Val::Px(top + (follow.target.y - top) * ease);
+        node.left = Val::Px(follow.target.x);
+        node.top = Val::Px(follow.target.y);
     }
 }
 
@@ -447,7 +570,8 @@ pub fn zone_snap_highlight_system(
     mut commands: Commands,
     time: Res<Time>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
-    mut dragged: Query<(&mut DragFollow, &ComputedNode), With<WordTile>>,
+    mut dragged: Query<(Entity, &mut DragFollow, &ComputedNode), With<WordTile>>,
+    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
     mut highlight: Query<
         (
             &mut SnapHighlight,
@@ -459,21 +583,28 @@ pub fn zone_snap_highlight_system(
     >,
 ) {
     let (zone_entity, zone_node, zone_transform) = zone.into_inner();
-    let inv = zone_node.inverse_scale_factor;
-
-    // Work out the snap cell and preview size while a drag hovers the zone.
     let mut snap = None;
-    if let Ok((mut follow, tile_node)) = dragged.single_mut() {
-        if zone_node.contains_point(*zone_transform, follow.pointer) {
-            let zone_top_left = (zone_transform.translation - zone_node.size * 0.5) * inv;
-            let tile_size = tile_node.size * tile_node.inverse_scale_factor;
-            let max = (zone_node.size * inv - tile_size).max(Vec2::ZERO);
-            let cell = snap_to_grid(follow.target - zone_top_left, max);
-            follow.snap_target = Some(cell);
-            snap = Some((cell, tile_size));
-        } else {
-            follow.snap_target = None;
-        }
+    if let Ok((entity, mut follow, tile_node)) = dragged.single_mut() {
+        let committed: Vec<_> = placed
+            .iter()
+            .filter(|(id, _, _)| *id != entity)
+            .map(|(entity, pos, node)| TileRect {
+                entity,
+                pos: pos.0,
+                size: node.size * node.inverse_scale_factor,
+            })
+            .collect();
+        let size = tile_node.size * tile_node.inverse_scale_factor;
+        let placement = placement_at(
+            entity,
+            follow.pointer,
+            follow.grab_offset,
+            size,
+            (zone_node, zone_transform),
+            &committed,
+        );
+        follow.snap_target = placement.as_ref().map(|(cell, _)| *cell);
+        snap = follow.snap_target.map(|cell| (cell, size));
     }
 
     // Ensure the highlight exists, as the zone's first child so dropped
@@ -497,8 +628,10 @@ pub fn zone_snap_highlight_system(
                     top: Val::Px(0.0),
                     width: Val::Px(0.0),
                     height: Val::Px(0.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    // Silhouette must track the tile's border width and
+                    // corner radius (currently 1px / 3px; see mod.rs).
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -568,5 +701,606 @@ pub fn snap_anim_system(
             node.top = Val::Px(anim.to.y);
             commands.entity(entity).remove::<SnapAnim>();
         }
+    }
+}
+
+/// One writer for neighbor preview/rollback motion. Drop snaps are excluded.
+pub fn push_preview_system(
+    time: Res<Time>,
+    zone: Single<(&ComputedNode, &UiGlobalTransform), With<WritingZone>>,
+    dragged: Query<(Entity, &DragFollow, &ComputedNode), With<WordTile>>,
+    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
+    mut nodes: Query<(Entity, &PlacedTile, &mut Node), (Without<DragFollow>, Without<SnapAnim>)>,
+) {
+    let held = dragged.single().ok();
+    let committed: Vec<_> = placed
+        .iter()
+        .filter(|(id, _, _)| held.is_none_or(|(entity, _, _)| entity != *id))
+        .map(|(entity, pos, node)| TileRect {
+            entity,
+            pos: pos.0,
+            size: node.size * node.inverse_scale_factor,
+        })
+        .collect();
+    let preview = held.and_then(|(entity, follow, node)| {
+        placement_at(
+            entity,
+            follow.pointer,
+            follow.grab_offset,
+            node.size * node.inverse_scale_factor,
+            *zone,
+            &committed,
+        )
+    });
+    for (entity, placed, mut node) in &mut nodes {
+        let target = preview
+            .as_ref()
+            .and_then(|(_, plan)| plan.iter().find(|tile| tile.entity == entity))
+            .map_or(placed.0, |tile| tile.pos);
+        let current = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
+        let pos = if current.distance(target) < 0.5 {
+            target
+        } else {
+            current.lerp(target, ease_factor(PUSH_SPEED, time.delta_secs()))
+        };
+        node.left = Val::Px(pos.x);
+        node.top = Val::Px(pos.y);
+    }
+}
+
+/// Escape restores the held tile's original zone position or tray slot.
+pub fn cancel_drag_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    zone: Single<Entity, With<WritingZone>>,
+    tray: Single<Entity, With<BoardTray>>,
+    gaps: Query<Entity, With<TrayGap>>,
+    mut dragged: Query<(Entity, &DragFollow, &mut Node)>,
+) {
+    if !keys.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    for gap in &gaps {
+        commands.entity(gap).despawn();
+    }
+    for (entity, follow, mut node) in &mut dragged {
+        commands
+            .entity(entity)
+            .remove::<(DragFollow, SnapAnim)>()
+            .insert(TileFeel {
+                scale: HELD_SCALE,
+                scale_target: 1.0,
+                shadow: 1.0,
+                shadow_target: 0.0,
+            });
+        if let Some(origin) = follow.origin {
+            node.left = Val::Px(origin.x);
+            node.top = Val::Px(origin.y);
+            commands
+                .entity(entity)
+                .insert((ChildOf(*zone), PlacedTile(origin)));
+        } else {
+            node.position_type = PositionType::Relative;
+            node.left = Val::Auto;
+            node.top = Val::Auto;
+            commands
+                .entity(*tray)
+                .insert_children(follow.tray_index, &[entity]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Headless fixture: real observers, hierarchy commands and the production
+    // Update chain, with measured UI geometry supplied instead of a renderer.
+    struct Lifecycle {
+        app: App,
+        zone: Entity,
+        held: Entity,
+        neighbors: [Entity; 2],
+        dpi: f32,
+        ui_scale: f32,
+        viewport_origin: Vec2,
+    }
+
+    fn geometry(size: Vec2, top_left: Vec2) -> (ComputedNode, UiGlobalTransform) {
+        (
+            ComputedNode {
+                size,
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            bevy::math::Affine2::from_translation(top_left + size * 0.5).into(),
+        )
+    }
+
+    fn pointer<E: std::fmt::Debug + Clone + Reflect>(
+        entity: Entity,
+        position: Vec2,
+        event: E,
+    ) -> Pointer<E> {
+        use bevy::camera::{ManualTextureViewHandle, NormalizedRenderTarget};
+        use bevy::picking::pointer::{Location, PointerId};
+        Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::TextureView(ManualTextureViewHandle(5)),
+                position,
+            },
+            event,
+            entity,
+        )
+    }
+
+    impl Lifecycle {
+        fn new() -> Self {
+            Self::scaled(1.0, 1.0, UVec2::ZERO)
+        }
+
+        fn scaled(dpi: f32, ui_scale: f32, viewport_origin: UVec2) -> Self {
+            use bevy::app::HierarchyPropagatePlugin;
+            use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
+            let mut app = App::new();
+            app.insert_resource(UiScale(ui_scale))
+                .add_plugins(HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(
+                    PostUpdate,
+                ))
+                .add_systems(Update, bevy::ui::update::propagate_ui_target_cameras);
+            app.world_mut().spawn((
+                Camera2d,
+                IsDefaultUiCamera,
+                Camera {
+                    computed: ComputedCameraValues {
+                        target_info: Some(RenderTargetInfo {
+                            physical_size: UVec2::splat(4096),
+                            scale_factor: dpi,
+                        }),
+                        ..default()
+                    },
+                    viewport: Some(Viewport {
+                        physical_position: viewport_origin,
+                        physical_size: UVec2::splat(3000),
+                        ..default()
+                    }),
+                    ..default()
+                },
+            ));
+            app.init_resource::<Time>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .add_systems(
+                    Update,
+                    (
+                        cancel_drag_system,
+                        tile_follow_system,
+                        tile_feel_system,
+                        tray_gap_system,
+                        tray_gap_anim_system,
+                        zone_snap_highlight_system,
+                        snap_anim_system,
+                        push_preview_system,
+                    )
+                        .chain(),
+                );
+            let zone = app
+                .world_mut()
+                .spawn((
+                    WritingZone,
+                    Node::default(),
+                    geometry(Vec2::new(640.0, 320.0), Vec2::ZERO),
+                ))
+                .id();
+            let tray = app
+                .world_mut()
+                .spawn((
+                    BoardTray,
+                    Node::default(),
+                    geometry(Vec2::new(640.0, 160.0), Vec2::new(0.0, 400.0)),
+                ))
+                .id();
+            // Keep Children present even after the only tray tile is picked up.
+            app.world_mut().spawn(ChildOf(tray));
+            app.world_mut()
+                .spawn((super::super::DragLayer, Node::default()));
+            let mut spawn_tile = |pos: Vec2, parent: Entity| {
+                app.world_mut()
+                    .spawn((
+                        WordTile {
+                            unique_word: "test".into(),
+                        },
+                        Node {
+                            left: Val::Px(pos.x),
+                            top: Val::Px(pos.y),
+                            ..default()
+                        },
+                        geometry(Vec2::new(80.0, 60.0), pos),
+                        ChildOf(parent),
+                    ))
+                    .observe(tile_drag_start)
+                    .observe(on_tile_drag)
+                    .observe(tile_drag_end)
+                    .id()
+            };
+            let held = spawn_tile(Vec2::new(0.0, 400.0), tray);
+            let neighbors = [
+                spawn_tile(Vec2::new(160.0, 80.0), zone),
+                spawn_tile(Vec2::new(240.0, 80.0), zone),
+            ];
+            for (entity, x) in neighbors.into_iter().zip([160.0, 240.0]) {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .insert(PlacedTile(Vec2::new(x, 80.0)));
+            }
+            let world = app.world_mut();
+            let mut geometry = world.query::<(&mut ComputedNode, &mut UiGlobalTransform)>();
+            for (mut node, mut transform) in geometry.iter_mut(world) {
+                node.size *= dpi * ui_scale;
+                node.inverse_scale_factor = 1.0 / (dpi * ui_scale);
+                let translation = transform.translation * dpi * ui_scale;
+                *transform = bevy::math::Affine2::from_translation(translation).into();
+            }
+            // Populate the same computed target-camera components as production.
+            app.update();
+            Self {
+                app,
+                zone,
+                held,
+                neighbors,
+                dpi,
+                ui_scale,
+                viewport_origin: viewport_origin.as_vec2(),
+            }
+        }
+
+        fn location(&self, ui_position: Vec2) -> Vec2 {
+            ui_position * self.ui_scale + self.viewport_origin / self.dpi
+        }
+
+        fn grab(&mut self, position: Vec2) {
+            use bevy::picking::backend::HitData;
+            let position = self.location(position);
+            self.app.world_mut().trigger(pointer(
+                self.held,
+                position,
+                DragStart {
+                    button: PointerButton::Primary,
+                    hit: HitData::new(self.zone, 0.0, None, None),
+                },
+            ));
+            self.app.world_mut().flush();
+            assert!(self.app.world().get::<DragFollow>(self.held).is_some());
+        }
+
+        fn release(&mut self) {
+            self.release_scaled();
+            self.assert_committed();
+        }
+
+        fn release_scaled(&mut self) {
+            let position = self.location(Vec2::new(170.0, 90.0));
+            self.app.world_mut().trigger(pointer(
+                self.held,
+                position,
+                DragEnd {
+                    button: PointerButton::Primary,
+                    distance: Vec2::ZERO,
+                },
+            ));
+            self.app.world_mut().flush();
+            assert!(self.app.world().get::<DragFollow>(self.held).is_none());
+            assert_eq!(
+                self.app.world().get::<ChildOf>(self.held).unwrap().parent(),
+                self.zone
+            );
+            assert_eq!(
+                self.app.world().get::<PlacedTile>(self.held).unwrap().0,
+                Vec2::new(160.0, 80.0)
+            );
+        }
+
+        fn step(&mut self) {
+            self.app
+                .world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            self.app.update();
+        }
+
+        fn assert_committed(&self) {
+            for (entity, x) in [self.held, self.neighbors[0], self.neighbors[1]]
+                .into_iter()
+                .zip([160.0, 240.0, 320.0])
+            {
+                assert_eq!(
+                    self.app.world().get::<PlacedTile>(entity).unwrap().0,
+                    Vec2::new(x, 80.0)
+                );
+            }
+        }
+
+        fn assert_settled(&mut self) {
+            for _ in 0..90 {
+                self.step();
+                self.assert_committed();
+            }
+            let mut positions = Vec::new();
+            for entity in [self.held, self.neighbors[0], self.neighbors[1]] {
+                let world = self.app.world();
+                let node = world.get::<Node>(entity).unwrap();
+                let pos = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
+                assert_eq!(pos, world.get::<PlacedTile>(entity).unwrap().0);
+                assert!(world.get::<SnapAnim>(entity).is_none());
+                assert!(world.get::<TileFeel>(entity).is_none());
+                positions.push(pos);
+            }
+            for pair in positions.windows(2) {
+                assert!(pair[0].x + 80.0 <= pair[1].x);
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_pointer_tracks_without_drift_and_drives_preview_and_release() {
+        for dpi in [1.0, 1.5, 2.0] {
+            for ui_scale in [1.0, 1.25] {
+                for origin in [UVec2::ZERO, UVec2::new(120, 60)] {
+                    let mut fixture = Lifecycle::scaled(dpi, ui_scale, origin);
+                    let grip = Vec2::new(10.0, 10.0);
+                    fixture.grab(Vec2::new(0.0, 400.0) + grip);
+                    for ui_pointer in [
+                        Vec2::new(100.0, 420.0),
+                        Vec2::new(330.0, 150.0),
+                        Vec2::new(170.0, 90.0),
+                    ] {
+                        let position = fixture.location(ui_pointer);
+                        fixture.app.world_mut().trigger(pointer(
+                            fixture.held,
+                            position,
+                            Drag {
+                                button: PointerButton::Primary,
+                                distance: Vec2::ZERO,
+                                delta: Vec2::ZERO,
+                            },
+                        ));
+                        fixture.step();
+                        let world = fixture.app.world();
+                        let follow = world.get::<DragFollow>(fixture.held).unwrap();
+                        assert!((follow.grab_offset - grip).length() < 0.001);
+                        assert!((follow.pointer - ui_pointer * dpi * ui_scale).length() < 0.001);
+                        let node = world.get::<Node>(fixture.held).unwrap();
+                        let actual = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
+                        assert!((actual + grip - ui_pointer).length() < 0.001);
+                        if ui_pointer.y == 420.0 {
+                            let mut gaps = fixture.app.world_mut().query::<&TrayGap>();
+                            assert!(
+                                gaps.iter(fixture.app.world())
+                                    .any(|gap| (gap.target_width - 80.0).abs() < 0.001)
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        fixture
+                            .app
+                            .world()
+                            .get::<DragFollow>(fixture.held)
+                            .unwrap()
+                            .snap_target,
+                        Some(Vec2::new(160.0, 80.0))
+                    );
+                    // Release must independently convert its position, not rely on
+                    // the previous move. This also covers release without any move.
+                    fixture.release_scaled();
+                    let mut immediate = Lifecycle::scaled(dpi, ui_scale, origin);
+                    immediate.grab(Vec2::new(10.0, 410.0));
+                    immediate.release_scaled();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_camera_ignores_grab_without_mutating_tile() {
+        let mut fixture = Lifecycle::new();
+        let camera = fixture
+            .app
+            .world()
+            .get::<ComputedUiTargetCamera>(fixture.held)
+            .unwrap()
+            .get()
+            .unwrap();
+        fixture.app.world_mut().despawn(camera);
+        fixture.app.world_mut().trigger(pointer(
+            fixture.held,
+            Vec2::new(10.0, 410.0),
+            DragStart {
+                button: PointerButton::Primary,
+                hit: bevy::picking::backend::HitData::new(fixture.zone, 0.0, None, None),
+            },
+        ));
+        fixture.app.world_mut().flush();
+        assert!(
+            fixture
+                .app
+                .world()
+                .get::<DragFollow>(fixture.held)
+                .is_none()
+        );
+        assert_eq!(
+            fixture.app.world().get::<Node>(fixture.held).unwrap().top,
+            Val::Px(400.0)
+        );
+    }
+
+    #[test]
+    fn rapid_release_commits_without_a_preview_frame_and_settles() {
+        let mut fixture = Lifecycle::new();
+        fixture.grab(Vec2::new(10.0, 410.0));
+        // Release is authoritative even before Drag/highlight/preview runs.
+        fixture.release();
+        assert_eq!(
+            fixture
+                .app
+                .world()
+                .get::<Node>(fixture.neighbors[0])
+                .unwrap()
+                .left,
+            Val::Px(160.0)
+        );
+        fixture.step();
+        fixture.assert_committed();
+        assert!(fixture.app.world().get::<SnapAnim>(fixture.held).is_some());
+        fixture.assert_settled();
+    }
+
+    #[test]
+    fn rapid_release_after_one_preview_frame_keeps_committed_push() {
+        let mut fixture = Lifecycle::new();
+        fixture.grab(Vec2::new(10.0, 410.0));
+        fixture.app.world_mut().trigger(pointer(
+            fixture.held,
+            Vec2::new(170.0, 90.0),
+            Drag {
+                button: PointerButton::Primary,
+                distance: Vec2::new(160.0, -320.0),
+                delta: Vec2::new(160.0, -320.0),
+            },
+        ));
+        fixture.step();
+        let neighbor = fixture.neighbors[0];
+        let world = fixture.app.world();
+        let preview_x = px_or_zero(world.get::<Node>(neighbor).unwrap().left);
+        assert!(preview_x > 160.0 && preview_x < 240.0);
+        assert_eq!(world.get::<PlacedTile>(neighbor).unwrap().0.x, 160.0);
+        fixture.release();
+        fixture.step();
+        assert!(px_or_zero(fixture.app.world().get::<Node>(neighbor).unwrap().left) > preview_x);
+        fixture.assert_settled();
+    }
+
+    #[test]
+    fn regrab_during_snap_then_escape_preserves_last_commit() {
+        let mut fixture = Lifecycle::new();
+        fixture.grab(Vec2::new(10.0, 410.0));
+        fixture.release();
+        fixture.step();
+        assert!(fixture.app.world().get::<SnapAnim>(fixture.held).is_some());
+        // Stand in for layout's transform propagation after this animation frame.
+        let node = fixture.app.world().get::<Node>(fixture.held).unwrap();
+        let pos = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
+        fixture
+            .app
+            .world_mut()
+            .entity_mut(fixture.held)
+            .insert(geometry(Vec2::new(80.0, 60.0), pos));
+        fixture.grab(pos + Vec2::splat(10.0));
+        assert!(fixture.app.world().get::<SnapAnim>(fixture.held).is_none());
+        assert_eq!(
+            fixture
+                .app
+                .world()
+                .get::<DragFollow>(fixture.held)
+                .unwrap()
+                .origin,
+            Some(Vec2::new(160.0, 80.0))
+        );
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        fixture.step();
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        assert!(
+            fixture
+                .app
+                .world()
+                .get::<DragFollow>(fixture.held)
+                .is_none()
+        );
+        assert_eq!(
+            fixture
+                .app
+                .world()
+                .get::<ChildOf>(fixture.held)
+                .unwrap()
+                .parent(),
+            fixture.zone
+        );
+        fixture.assert_settled();
+    }
+
+    #[test]
+    fn escape_restores_held_and_rolls_back_neighbors() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (cancel_drag_system, push_preview_system).chain());
+        let zone = app.world_mut().spawn((WritingZone, Node::default())).id();
+        app.world_mut().spawn(BoardTray);
+        let origin = Vec2::new(80.0, 80.0);
+        let held = app
+            .world_mut()
+            .spawn((
+                WordTile {
+                    unique_word: "held".into(),
+                },
+                Node::default(),
+                PlacedTile(origin),
+                DragFollow {
+                    grab_offset: Vec2::ZERO,
+                    target: Vec2::ZERO,
+                    pointer: Vec2::ZERO,
+                    snap_target: None,
+                    origin: Some(origin),
+                    tray_index: 0,
+                },
+            ))
+            .id();
+        let neighbor = app
+            .world_mut()
+            .spawn((
+                WordTile {
+                    unique_word: "neighbor".into(),
+                },
+                Node {
+                    left: Val::Px(240.0),
+                    top: Val::Px(80.0),
+                    ..default()
+                },
+                PlacedTile(Vec2::new(160.0, 80.0)),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(1));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        assert!(app.world().get::<DragFollow>(held).is_none());
+        assert_eq!(app.world().get::<ChildOf>(held).unwrap().parent(), zone);
+        assert_eq!(app.world().get::<PlacedTile>(held).unwrap().0, origin);
+        assert_eq!(
+            app.world().get::<Node>(neighbor).unwrap().left,
+            Val::Px(160.0)
+        );
+        assert_eq!(
+            app.world().get::<PlacedTile>(neighbor).unwrap().0,
+            Vec2::new(160.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn edge_snap_stays_on_grid() {
+        assert_eq!(
+            snap_to_grid(Vec2::splat(999.0), Vec2::new(123.0, 79.0)),
+            Vec2::new(120.0, 40.0)
+        );
     }
 }
