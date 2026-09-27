@@ -1,12 +1,14 @@
 mod drag;
 pub(crate) mod placement;
+mod tray;
 use crate::prelude::*;
 use crate::word_bank::{WordBank, WordBankHandle, select_words};
 pub use drag::{
     PlacedTile, cancel_drag_system, push_preview_system, snap_anim_system, tile_feel_system,
-    tile_follow_system, tray_gap_anim_system, tray_gap_system, zone_snap_highlight_system,
+    tile_follow_system, zone_snap_highlight_system,
 };
 use drag::{on_tile_drag, tile_drag_end, tile_drag_start};
+pub use tray::{tray_gap_system, tray_slide_system};
 
 /// Handle to the literary typeface used for tile text.
 #[derive(Resource)]

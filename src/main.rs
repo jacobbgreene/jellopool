@@ -79,7 +79,6 @@ fn main() {
                 tiles::tile_follow_system,
                 tiles::tile_feel_system,
                 tiles::tray_gap_system,
-                tiles::tray_gap_anim_system,
                 tiles::zone_snap_highlight_system,
                 tiles::snap_anim_system,
                 tiles::push_preview_system,
@@ -87,6 +86,13 @@ fn main() {
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         ),
+    )
+    .add_systems(
+        PostUpdate,
+        tiles::tray_slide_system
+            .after(bevy::ui::UiSystems::Layout)
+            .before(bevy::ui::UiSystems::PostLayout)
+            .run_if(in_state(AppState::Playing)),
     )
     // Chained so the root (and its tray) exist before tiles spawn into it.
     .add_systems(

@@ -1,12 +1,11 @@
 use super::placement::{GRID, TileRect, plan};
+use super::tray::{TrayGap, TrayMotion, TraySlot, child_index, insertion_slot, spawn_gap};
 use crate::prelude::*;
 
 /// Ease speed for neighboring tiles sliding during drag previews.
 const PUSH_SPEED: f32 = 28.0;
 /// Ease speed for pickup/drop scale and shadow.
 const FEEL_SPEED: f32 = 16.0;
-/// Ease speed for tray gaps opening/closing.
-const GAP_SPEED: f32 = 14.0;
 /// Scale a tile eases to while held.
 const HELD_SCALE: f32 = 1.06;
 /// Seconds the snap-into-place animation takes.
@@ -79,23 +78,13 @@ pub struct DragFollow {
     /// Where the tile's top-left should be right now (logical units).
     target: Vec2,
     /// Latest pointer position in physical viewport pixels, for region hit tests.
-    pointer: Vec2,
+    pub(super) pointer: Vec2,
     /// The grid cell the tile would snap to if dropped right now
     /// (writing-zone-relative logical units), while hovering the zone.
     snap_target: Option<Vec2>,
     origin: Option<Vec2>,
     tray_index: usize,
-}
-
-/// Invisible spacer that reserves room in the tray for the dragged tile.
-/// Its width eases open/closed, so neighboring tiles slide apart smoothly.
-/// When the pointer moves to a new slot, the old gap closes while a new
-/// one opens — the tray never reflows abruptly.
-#[derive(Component)]
-pub struct TrayGap {
-    width: f32,
-    target_width: f32,
-    height: f32,
+    pub(super) tray_slots: Vec<TraySlot>,
 }
 
 /// Translucent landing preview shown in the writing zone where the dragged
@@ -226,17 +215,31 @@ pub fn tile_drag_start(
     cameras: Query<&Camera>,
     mut tiles: TileGrabQuery,
     active: Query<Entity, With<DragFollow>>,
-    tray: Single<&Children, With<BoardTray>>,
+    tray: Single<(Entity, Option<&Children>), With<BoardTray>>,
     snapping: Query<Entity, (With<PlacedTile>, With<SnapAnim>)>,
 ) {
     if !active.is_empty() {
         return;
     }
-    let tray_index = tray
-        .iter()
+    let (tray_entity, tray_children) = tray.into_inner();
+    let tray_index = tray_children
+        .into_iter()
+        .flat_map(|children| children.iter())
         .take_while(|child| *child != event.entity)
         .filter(|child| tiles.contains(*child))
         .count();
+    let tray_slots = tray_children
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .filter_map(|entity| {
+            let (node, _, transform, _, _) = tiles.get(entity).ok()?;
+            Some(TraySlot {
+                entity,
+                rect: Rect::from_center_size(transform.translation, node.size),
+                is_held: entity == event.entity,
+            })
+        })
+        .collect();
     let Ok((computed, camera, transform, mut node, placed)) = tiles.get_mut(event.entity) else {
         return;
     };
@@ -257,6 +260,21 @@ pub fn tile_drag_start(
     let inv = computed.inverse_scale_factor;
     let top_left = (transform.translation - computed.size * 0.5) * inv;
 
+    // Reserve the source slot before layout sees the tile leave, so pickup
+    // itself cannot collapse the row and move all the insertion anchors.
+    if placed.is_none() {
+        let index = tray_children
+            .and_then(|children| children.iter().position(|child| child == event.entity))
+            .unwrap_or(0);
+        spawn_gap(
+            &mut commands,
+            tray_entity,
+            index,
+            tray_index,
+            computed.size * inv,
+        );
+    }
+
     node.position_type = PositionType::Absolute;
     node.left = Val::Px(top_left.x);
     node.top = Val::Px(top_left.y);
@@ -266,7 +284,7 @@ pub fn tile_drag_start(
     commands
         .entity(event.entity)
         .insert(ChildOf(*drag_layer))
-        .remove::<SnapAnim>()
+        .remove::<(SnapAnim, TrayMotion)>()
         .insert(DragFollow {
             grab_offset: pointer_logical - top_left,
             target: top_left,
@@ -274,6 +292,7 @@ pub fn tile_drag_start(
             snap_target: None,
             origin: placed.map(|placed| placed.0),
             tray_index,
+            tray_slots,
         })
         .insert(TileFeel {
             scale: 1.0,
@@ -312,8 +331,8 @@ pub fn tile_drag_end(
     event: On<Pointer<DragEnd>>,
     cameras: Query<&Camera>,
     mut commands: Commands,
-    tray: Single<(Entity, &Children), With<BoardTray>>,
-    gaps: Query<(Entity, &TrayGap)>,
+    tray: Single<(Entity, &ComputedNode, &UiGlobalTransform, Option<&Children>), With<BoardTray>>,
+    gaps: Query<Entity, With<TrayGap>>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     placed: PlacedTiles,
     mut tiles: TileDropQuery,
@@ -322,7 +341,7 @@ pub fn tile_drag_end(
         return;
     };
     let (zone_entity, zone_node, zone_transform) = zone.into_inner();
-    let (tray_entity, tray_children) = tray.into_inner();
+    let (tray_entity, tray_node, tray_transform, tray_children) = tray.into_inner();
 
     let Some(follow) = follow else {
         return;
@@ -348,6 +367,10 @@ pub fn tile_drag_end(
         (zone_node, zone_transform),
         &committed,
     );
+
+    for gap in &gaps {
+        commands.entity(gap).despawn();
+    }
 
     // Start the settle animation; the shadow fades out via TileFeel.
     commands
@@ -391,38 +414,23 @@ pub fn tile_drag_end(
             .insert(SnapAnim { from, to, t: 0.0 });
     } else {
         commands.entity(event.entity).remove::<PlacedTile>();
-        // Back to the tray: rejoin normal flex layout and let it reflow.
+        // Recompute from the release event, even if no preview frame ran.
+        let slot = if tray_node.contains_point(*tray_transform, pointer) {
+            insertion_slot(&follow.tray_slots, pointer)
+        } else {
+            follow.tray_slots.len()
+        };
+        let index = child_index(tray_children, &gaps, &follow.tray_slots, slot);
         node.position_type = PositionType::Relative;
         node.left = Val::Auto;
         node.top = Val::Auto;
-
-        // If the tray is previewing an open gap, the tile takes that exact
-        // slot; the gap reserved the tile's size, so nothing visibly jumps.
-        let open_gap = gaps
-            .iter()
-            .find(|(_, gap)| gap.target_width > 0.0)
-            .map(|(entity, _)| entity);
-
-        match open_gap {
-            Some(gap) => {
-                // Count only real tiles before the gap; other (closing)
-                // gaps are despawned below and don't take a slot.
-                let index = tray_children
-                    .iter()
-                    .take_while(|child| *child != gap)
-                    .filter(|child| !gaps.contains(*child))
-                    .count();
-                for (gap_entity, _) in &gaps {
-                    commands.entity(gap_entity).despawn();
-                }
-                commands
-                    .entity(tray_entity)
-                    .insert_children(index, &[event.entity]);
-            }
-            None => {
-                commands.entity(event.entity).insert(ChildOf(tray_entity));
-            }
-        }
+        commands.entity(event.entity).insert(TrayMotion {
+            center: pointer * computed.inverse_scale_factor - follow.grab_offset
+                + computed.size * computed.inverse_scale_factor * 0.5,
+        });
+        commands
+            .entity(tray_entity)
+            .insert_children(index, &[event.entity]);
     }
 }
 
@@ -463,122 +471,6 @@ pub fn tile_feel_system(
         if feel.scale == 1.0 && feel.shadow == 0.0 {
             commands.entity(entity).remove::<TileFeel>();
         }
-    }
-}
-
-/// While a tile is dragged over the tray, keeps a gap open at the slot the
-/// tile would occupy. Moving between slots closes the old gap and opens a
-/// new one, so tray tiles always slide instead of jumping.
-pub fn tray_gap_system(
-    mut commands: Commands,
-    tray: Single<(Entity, &ComputedNode, &UiGlobalTransform, &Children), With<BoardTray>>,
-    dragged: Query<(&DragFollow, &ComputedNode), With<WordTile>>,
-    tiles: Query<(&ComputedNode, &UiGlobalTransform), With<WordTile>>,
-    mut gaps: Query<(Entity, &mut TrayGap)>,
-) {
-    let (tray_entity, tray_node, tray_transform, tray_children) = tray.into_inner();
-
-    let close_all = |gaps: &mut Query<(Entity, &mut TrayGap)>| {
-        for (_, mut gap) in gaps.iter_mut() {
-            gap.target_width = 0.0;
-        }
-    };
-
-    // Close all gaps when nothing is being dragged.
-    let Ok((follow, dragged_node)) = dragged.single() else {
-        close_all(&mut gaps);
-        return;
-    };
-
-    // Close all gaps when the pointer isn't over the tray.
-    if !tray_node.contains_point(*tray_transform, follow.pointer) {
-        close_all(&mut gaps);
-        return;
-    }
-
-    let inv = tray_node.inverse_scale_factor;
-    let tile_width = dragged_node.size.x * inv;
-    let tile_height = dragged_node.size.y * inv;
-
-    // The gap's slot: how many tray tiles come "before" the pointer in
-    // reading order (rows top-to-bottom, left-to-right within a row).
-    let pointer = follow.pointer;
-    let mut index = 0;
-    for child in tray_children.iter() {
-        if gaps.contains(child) {
-            continue;
-        }
-        let Ok((child_node, child_transform)) = tiles.get(child) else {
-            continue;
-        };
-        let center = child_transform.translation;
-        let half_height = child_node.size.y * 0.5;
-        let row_above = center.y < pointer.y - half_height;
-        let same_row_left = (pointer.y - center.y).abs() <= half_height && center.x < pointer.x;
-        if row_above || same_row_left {
-            index += 1;
-        }
-    }
-
-    // Keep open whichever gap already sits at the desired slot; every
-    // other gap closes. This is what makes slot changes smooth.
-    let mut slot_covered = false;
-    for (gap_entity, mut gap) in &mut gaps {
-        let tiles_before = tray_children
-            .iter()
-            .take_while(|child| *child != gap_entity)
-            .filter(|child| tiles.contains(*child))
-            .count();
-        if !slot_covered && tiles_before == index && gap.target_width > 0.0 {
-            gap.target_width = tile_width;
-            gap.height = tile_height;
-            slot_covered = true;
-        } else {
-            gap.target_width = 0.0;
-        }
-    }
-
-    // No gap at the desired slot yet: open a fresh one there.
-    if !slot_covered {
-        let gap = commands
-            .spawn((
-                Name::new("tray_gap"),
-                TrayGap {
-                    width: 0.0,
-                    target_width: tile_width,
-                    height: tile_height,
-                },
-                Node {
-                    width: Val::Px(0.0),
-                    height: Val::Px(tile_height),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(tray_entity).insert_children(index, &[gap]);
-    }
-}
-
-/// Eases each tray gap's width; neighbors slide as layout reflows every
-/// frame. Despawns gaps once fully closed.
-pub fn tray_gap_anim_system(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut gaps: Query<(Entity, &mut TrayGap, &mut Node)>,
-) {
-    let ease = ease_factor(GAP_SPEED, time.delta_secs());
-    for (entity, mut gap, mut node) in &mut gaps {
-        gap.width += (gap.target_width - gap.width) * ease;
-        if (gap.target_width - gap.width).abs() < 0.5 {
-            gap.width = gap.target_width;
-        }
-        if gap.width == 0.0 && gap.target_width == 0.0 {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        node.width = Val::Px(gap.width);
-        node.height = Val::Px(gap.height);
     }
 }
 
@@ -772,17 +664,24 @@ pub fn cancel_drag_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     zone: Single<Entity, With<WritingZone>>,
-    tray: Single<Entity, With<BoardTray>>,
+    tray: Single<(Entity, Option<&Children>), With<BoardTray>>,
     gaps: Query<Entity, With<TrayGap>>,
-    mut dragged: Query<(Entity, &DragFollow, &mut Node)>,
+    mut dragged: Query<(
+        Entity,
+        &DragFollow,
+        &mut Node,
+        &ComputedNode,
+        &UiGlobalTransform,
+    )>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }
+    let (tray_entity, tray_children) = tray.into_inner();
     for gap in &gaps {
         commands.entity(gap).despawn();
     }
-    for (entity, follow, mut node) in &mut dragged {
+    for (entity, follow, mut node, computed, transform) in &mut dragged {
         commands
             .entity(entity)
             .remove::<(DragFollow, SnapAnim)>()
@@ -802,9 +701,13 @@ pub fn cancel_drag_system(
             node.position_type = PositionType::Relative;
             node.left = Val::Auto;
             node.top = Val::Auto;
+            let index = child_index(tray_children, &gaps, &follow.tray_slots, follow.tray_index);
+            commands.entity(entity).insert(TrayMotion {
+                center: transform.translation * computed.inverse_scale_factor,
+            });
             commands
-                .entity(*tray)
-                .insert_children(follow.tray_index, &[entity]);
+                .entity(tray_entity)
+                .insert_children(index, &[entity]);
         }
     }
 }
@@ -812,6 +715,7 @@ pub fn cancel_drag_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tiles::tray_gap_system;
 
     // Headless fixture: real observers, hierarchy commands and the production
     // Update chain, with measured UI geometry supplied instead of a renderer.
@@ -896,7 +800,6 @@ mod tests {
                         tile_follow_system,
                         tile_feel_system,
                         tray_gap_system,
-                        tray_gap_anim_system,
                         zone_snap_highlight_system,
                         snap_anim_system,
                         push_preview_system,
@@ -1092,10 +995,13 @@ mod tests {
                         let actual = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
                         assert!((actual + grip - ui_pointer).length() < 0.001);
                         if ui_pointer.y == 420.0 {
-                            let mut gaps = fixture.app.world_mut().query::<&TrayGap>();
+                            let mut gaps = fixture
+                                .app
+                                .world_mut()
+                                .query_filtered::<&Node, With<TrayGap>>();
                             assert!(
                                 gaps.iter(fixture.app.world())
-                                    .any(|gap| (gap.target_width - 80.0).abs() < 0.001)
+                                    .any(|gap| (px_or_zero(gap.width) - 80.0).abs() < 0.001)
                             );
                         }
                     }
@@ -1278,6 +1184,7 @@ mod tests {
                     snap_target: None,
                     origin: Some(origin),
                     tray_index: 0,
+                    tray_slots: Vec::new(),
                 },
             ))
             .id();
