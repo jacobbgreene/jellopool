@@ -30,33 +30,35 @@ fn row_pitch(tile: TileRect) -> f32 {
 
 /// Flow rule, side-aware: push `tile` away from the overlapping `source`
 /// along x only — left if the tile's center is left of the source's, right
-/// otherwise (coincident centers push right). The push is the smallest grid
-/// multiple that separates the pair. If the left escape would cross x = 0,
-/// the tile extends right instead; if the right side would cross the right
-/// edge of `bounds`, the tile wraps to the start of the next row (x = 0,
-/// one row pitch down), like a word moving to the next line.
+/// otherwise (coincident centers push right).
 ///
-/// Side-awareness matters: a purely rightward rule flings left neighbors
-/// across the source (push distance = source.right - tile.left), so dragging
-/// into a row shoves every tile ahead of the cursor to the zone's edge.
+/// The push is a CONSTANT STEP: the source's grid-rounded width, i.e. exactly
+/// enough room for the source's footprint, measured from the tile's own
+/// position. An overlap-depth push (source.right - tile.left) chases: the
+/// overlap grows as the source advances, so the target slides endlessly
+/// ahead of the cursor until it hits the zone edge. A constant step yields
+/// once and stays put; when the source's center crosses the tile's, the
+/// direction flips and the two swap sides at the same fixed offset.
+///
+/// If the left escape would cross x = 0, the tile extends right instead; if
+/// the right side would cross the right edge of `bounds`, the tile wraps to
+/// the start of the next row (x = 0, one row pitch down), like a word
+/// moving to the next line. A wide tile can still overlap its source after
+/// one step; `plan` re-queues the source in that case.
 fn push_apart(source: TileRect, tile: TileRect, bounds: Vec2) -> TileRect {
+    let step = (source.size.x / GRID).ceil() * GRID;
     let push_left = tile.pos.x + tile.size.x * 0.5 < source.pos.x + source.size.x * 0.5;
     let mut moved = tile;
     if push_left {
-        // Overlap implies tile.right > source.left: positive overlap depth.
-        let distance = tile.pos.x + tile.size.x - source.pos.x;
-        moved.pos.x -= (distance / GRID).ceil() * GRID;
+        moved.pos.x -= step;
         if moved.pos.x < 0.0 {
             // No room on the left: extend right instead (the wrap check
             // below still applies).
             moved = tile;
-            let distance = source.pos.x + source.size.x - tile.pos.x;
-            moved.pos.x += (distance / GRID).ceil() * GRID;
+            moved.pos.x += step;
         }
     } else {
-        // Overlap implies tile.left < source.right: positive overlap depth.
-        let distance = source.pos.x + source.size.x - tile.pos.x;
-        moved.pos.x += (distance / GRID).ceil() * GRID;
+        moved.pos.x += step;
     }
     if moved.pos.x + moved.size.x > bounds.x {
         moved.pos.x = 0.0;
@@ -104,7 +106,7 @@ pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Opti
             }
             let mut moved = push_apart(source, *tile, bounds);
             // The held tile never moves; a push landing on its cell must
-            // also clear it. Rightward re-push keeps the rank monotone.
+            // also clear it.
             if overlaps(held, moved) {
                 moved = push_apart(held, moved, bounds);
             }
@@ -113,6 +115,12 @@ pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Opti
             }
             *tile = moved;
             queue.push_back(moved.entity);
+            // A constant step can leave a wide tile still overlapping its
+            // source: re-queue the source so it pushes the tile another
+            // step until they separate.
+            if overlaps(source, moved) {
+                queue.push_back(source.entity);
+            }
         }
     }
     Some(result)
@@ -141,8 +149,8 @@ mod tests {
         // overlaps push away along x — never vertical.
         let other = rect(1, 160.0, 160.0, 80.0);
         for (x, y, expected) in [
-            (120.0, 160.0, Vec2::new(200.0, 160.0)),
-            (200.0, 160.0, Vec2::new(120.0, 160.0)),
+            (120.0, 160.0, Vec2::new(240.0, 160.0)),
+            (200.0, 160.0, Vec2::new(80.0, 160.0)),
             (160.0, 120.0, Vec2::new(240.0, 160.0)),
             (160.0, 200.0, Vec2::new(240.0, 160.0)),
         ] {
@@ -155,11 +163,12 @@ mod tests {
     #[test]
     fn left_neighbor_nudges_left_not_across() {
         // Dragging rightward into a tile whose center is left of the held
-        // tile's: a small leftward nudge, NOT a leapfrog across the held
-        // tile to its right side (the "shoved to the zone edge" bug).
-        let committed = [rect(1, 80.0, 0.0, 100.0)];
+        // tile's: a leftward step (the held tile's grid-rounded width), NOT
+        // a leapfrog across the held tile to its right side (the "shoved to
+        // the zone edge" bug).
+        let committed = [rect(1, 160.0, 0.0, 100.0)];
         let result = plan(
-            rect(0, 140.0, 0.0, 100.0),
+            rect(0, 220.0, 0.0, 100.0),
             &committed,
             Vec2::splat(600.0),
         )
@@ -169,9 +178,11 @@ mod tests {
     #[test]
     fn left_escape_at_edge_extends_right() {
         // No room left of the source: the tile comes back and extends right.
+        // One step (120) still overlaps the held tile, so the re-queue pushes
+        // it a second step.
         let committed = [rect(1, 0.0, 0.0, 100.0)];
         let result = plan(rect(0, 60.0, 0.0, 100.0), &committed, Vec2::splat(600.0)).unwrap();
-        assert_eq!(pos_of(&result, 1), Vec2::new(160.0, 0.0));
+        assert_eq!(pos_of(&result, 1), Vec2::new(240.0, 0.0));
     }
     #[test]
     fn variable_width_cascade_and_repeat() {
@@ -186,7 +197,7 @@ mod tests {
                     .unwrap()
                     .pos
                     .x,
-                200.0
+                400.0
             );
             assert_eq!(
                 result
@@ -195,7 +206,7 @@ mod tests {
                     .unwrap()
                     .pos
                     .x,
-                360.0
+                280.0
             );
             assert!(!overlaps(result[0], result[1]));
         }
@@ -238,7 +249,7 @@ mod tests {
         )
         .unwrap();
         // Only the tile overlapping the held tile joins the cascade.
-        assert_eq!(pos_of(&result, 1), Vec2::new(120.0, 80.0));
+        assert_eq!(pos_of(&result, 1), Vec2::new(200.0, 80.0));
         for id in [2, 3, 4] {
             let original = committed
                 .iter()
