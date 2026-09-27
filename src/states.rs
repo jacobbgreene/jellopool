@@ -5,6 +5,8 @@ use bevy::prelude::*;
 pub enum AppState {
     #[default]
     Loading,
+    // Placeholder for the future menu screen; nothing routes here yet.
+    #[allow(dead_code)]
     MainMenu,
     Playing,
 }

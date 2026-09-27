@@ -1,6 +1,5 @@
-use super::placement::{TileRect, plan};
-use super::{BoardTray, WordTile, WritingZone};
-use bevy::prelude::*;
+use super::placement::{GRID, TileRect, plan};
+use crate::prelude::*;
 
 /// Ease speed for neighboring tiles sliding during drag previews.
 const PUSH_SPEED: f32 = 28.0;
@@ -10,9 +9,6 @@ const FEEL_SPEED: f32 = 16.0;
 const GAP_SPEED: f32 = 14.0;
 /// Scale a tile eases to while held.
 const HELD_SCALE: f32 = 1.06;
-/// Writing-zone snap grid: tile top-lefts land on multiples of this
-/// (logical pixels), measured from the zone's top-left.
-const GRID_CELL: f32 = 40.0;
 /// Seconds the snap-into-place animation takes.
 const SNAP_DURATION: f32 = 0.16;
 /// Ease speeds for the snap highlight's position, size, and fade.
@@ -23,6 +19,44 @@ const HIGHLIGHT_FADE_SPEED: f32 = 12.0;
 /// Alpha scales with fade intensity.
 const HIGHLIGHT_FILL: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.12);
 const HIGHLIGHT_BORDER: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.55);
+
+// Query shapes shared (or just too wide to inline) across the drag systems.
+/// Tiles with full layout info and an editable `Node`, grabbed in `tile_drag_start`.
+type TileGrabQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ComputedNode,
+        &'static ComputedUiTargetCamera,
+        &'static UiGlobalTransform,
+        &'static mut Node,
+        Option<&'static PlacedTile>,
+    ),
+    With<WordTile>,
+>;
+/// Same layout info but reporting drag state instead of placement, for `tile_drag_end`.
+type TileDropQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ComputedNode,
+        &'static ComputedUiTargetCamera,
+        &'static UiGlobalTransform,
+        Option<&'static DragFollow>,
+        &'static mut Node,
+    ),
+    With<WordTile>,
+>;
+/// All tiles currently snapped into the writing zone, with their sizes.
+type PlacedTiles<'w, 's> =
+    Query<'w, 's, (Entity, &'static PlacedTile, &'static ComputedNode), With<WordTile>>;
+/// Snapped tiles the preview writer may move: not dragged, not mid-snap.
+type PlacedNodes<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static PlacedTile, &'static mut Node),
+    (Without<DragFollow>, Without<SnapAnim>),
+>;
 
 /// Per-frame eased "juice" for a tile: visual scale and shadow intensity.
 /// Inserted on drag start, removed once the drop animation settles.
@@ -146,10 +180,11 @@ fn ease_factor(speed: f32, dt: f32) -> f32 {
     1.0 - (-speed * dt).exp()
 }
 
-/// Round a position to the nearest grid cell, clamped to the usable area.
+/// Round a position to the nearest grid cell (placement::GRID, logical
+/// pixels from the zone's top-left), clamped to the usable area.
 fn snap_to_grid(pos: Vec2, max: Vec2) -> Vec2 {
-    let snapped = (pos / GRID_CELL).round() * GRID_CELL;
-    snapped.clamp(Vec2::ZERO, (max / GRID_CELL).floor() * GRID_CELL)
+    let snapped = (pos / GRID).round() * GRID;
+    snapped.clamp(Vec2::ZERO, (max / GRID).floor() * GRID)
 }
 
 /// Ease-out with a slight overshoot — the "click" into place.
@@ -183,21 +218,13 @@ fn pointer_in_viewport(
 
 /// On grab: move the tile into the drag layer without it visibly jumping,
 /// and start the float animation (slight grow + shadow fade-in).
+#[allow(clippy::too_many_arguments)] // Bevy injects each system param.
 pub fn tile_drag_start(
     event: On<Pointer<DragStart>>,
     mut commands: Commands,
-    drag_layer: Single<Entity, With<super::DragLayer>>,
+    drag_layer: Single<Entity, With<DragLayer>>,
     cameras: Query<&Camera>,
-    mut tiles: Query<
-        (
-            &ComputedNode,
-            &ComputedUiTargetCamera,
-            &UiGlobalTransform,
-            &mut Node,
-            Option<&PlacedTile>,
-        ),
-        With<WordTile>,
-    >,
+    mut tiles: TileGrabQuery,
     active: Query<Entity, With<DragFollow>>,
     tray: Single<&Children, With<BoardTray>>,
     snapping: Query<Entity, (With<PlacedTile>, With<SnapAnim>)>,
@@ -280,6 +307,7 @@ pub fn on_tile_drag(
 /// On release: drop into the writing zone if the pointer is inside it,
 /// snapping to the highlighted grid cell, otherwise return to the tray —
 /// into the gap the tray is currently previewing, if there is one.
+#[allow(clippy::too_many_arguments)] // Bevy injects each system param.
 pub fn tile_drag_end(
     event: On<Pointer<DragEnd>>,
     cameras: Query<&Camera>,
@@ -287,17 +315,8 @@ pub fn tile_drag_end(
     tray: Single<(Entity, &Children), With<BoardTray>>,
     gaps: Query<(Entity, &TrayGap)>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
-    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
-    mut tiles: Query<
-        (
-            &ComputedNode,
-            &ComputedUiTargetCamera,
-            &UiGlobalTransform,
-            Option<&DragFollow>,
-            &mut Node,
-        ),
-        With<WordTile>,
-    >,
+    placed: PlacedTiles,
+    mut tiles: TileDropQuery,
 ) {
     let Ok((computed, camera, transform, follow, mut node)) = tiles.get_mut(event.entity) else {
         return;
@@ -571,7 +590,7 @@ pub fn zone_snap_highlight_system(
     time: Res<Time>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     mut dragged: Query<(Entity, &mut DragFollow, &ComputedNode), With<WordTile>>,
-    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
+    placed: PlacedTiles,
     mut highlight: Query<
         (
             &mut SnapHighlight,
@@ -709,8 +728,8 @@ pub fn push_preview_system(
     time: Res<Time>,
     zone: Single<(&ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     dragged: Query<(Entity, &DragFollow, &ComputedNode), With<WordTile>>,
-    placed: Query<(Entity, &PlacedTile, &ComputedNode), With<WordTile>>,
-    mut nodes: Query<(Entity, &PlacedTile, &mut Node), (Without<DragFollow>, Without<SnapAnim>)>,
+    placed: PlacedTiles,
+    mut nodes: PlacedNodes,
 ) {
     let held = dragged.single().ok();
     let committed: Vec<_> = placed

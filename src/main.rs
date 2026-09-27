@@ -1,5 +1,5 @@
 mod prelude;
-use bevy::prelude::*;
+use crate::prelude::*;
 mod board;
 mod fixture;
 mod states;
@@ -8,8 +8,7 @@ mod word_bank;
 
 use crate::{
     board::spawn_board,
-    states::AppState,
-    tiles::{GameFont, spawn_all_tiles, spawn_board_root},
+    tiles::{spawn_all_tiles, spawn_board_root},
     word_bank::{WordBank, load_word_bank, switch_to_playing_state},
 };
 use bevy::window::{MonitorSelection, WindowMode, WindowResolution};

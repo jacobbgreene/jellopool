@@ -21,38 +21,58 @@ fn fits(tile: TileRect, bounds: Vec2) -> bool {
     tile.pos.cmpge(Vec2::ZERO).all() && (tile.pos + tile.size).cmple(bounds).all()
 }
 
-/// Side of the closest overlapping center, normalized for rectangular sizes.
-/// Horizontal wins equal-axis ties; coincident centers push right.
-fn direction(held: TileRect, other: TileRect) -> Vec2 {
-    let delta = (other.pos + other.size * 0.5 - held.pos - held.size * 0.5)
-        / ((held.size + other.size) * 0.5);
-    if delta.x.abs() >= delta.y.abs() {
-        Vec2::new(if delta.x < 0.0 { -1.0 } else { 1.0 }, 0.0)
-    } else {
-        Vec2::new(0.0, if delta.y < 0.0 { -1.0 } else { 1.0 })
-    }
+/// One row's vertical pitch: the smallest grid multiple that separates two
+/// tile-height rectangles. Tile heights are uniform (fixed font + padding),
+/// so this is effectively a constant per tile.
+fn row_pitch(tile: TileRect) -> f32 {
+    (tile.size.y / GRID).ceil() * GRID
 }
 
-/// Move `tile` directly away from the overlapping `source` by the smallest
-/// grid multiple that separates the two along the push axis.
-fn push_apart(source: TileRect, tile: TileRect) -> TileRect {
-    let dir = direction(source, tile);
-    let distance = if dir.x > 0.0 {
-        source.pos.x + source.size.x - tile.pos.x
-    } else if dir.x < 0.0 {
-        tile.pos.x + tile.size.x - source.pos.x
-    } else if dir.y > 0.0 {
-        source.pos.y + source.size.y - tile.pos.y
-    } else {
-        tile.pos.y + tile.size.y - source.pos.y
-    };
+/// Flow rule, side-aware: push `tile` away from the overlapping `source`
+/// along x only — left if the tile's center is left of the source's, right
+/// otherwise (coincident centers push right). The push is the smallest grid
+/// multiple that separates the pair. If the left escape would cross x = 0,
+/// the tile extends right instead; if the right side would cross the right
+/// edge of `bounds`, the tile wraps to the start of the next row (x = 0,
+/// one row pitch down), like a word moving to the next line.
+///
+/// Side-awareness matters: a purely rightward rule flings left neighbors
+/// across the source (push distance = source.right - tile.left), so dragging
+/// into a row shoves every tile ahead of the cursor to the zone's edge.
+fn push_apart(source: TileRect, tile: TileRect, bounds: Vec2) -> TileRect {
+    let push_left = tile.pos.x + tile.size.x * 0.5 < source.pos.x + source.size.x * 0.5;
     let mut moved = tile;
-    moved.pos += dir * (distance / GRID).ceil() * GRID;
+    if push_left {
+        // Overlap implies tile.right > source.left: positive overlap depth.
+        let distance = tile.pos.x + tile.size.x - source.pos.x;
+        moved.pos.x -= (distance / GRID).ceil() * GRID;
+        if moved.pos.x < 0.0 {
+            // No room on the left: extend right instead (the wrap check
+            // below still applies).
+            moved = tile;
+            let distance = source.pos.x + source.size.x - tile.pos.x;
+            moved.pos.x += (distance / GRID).ceil() * GRID;
+        }
+    } else {
+        // Overlap implies tile.left < source.right: positive overlap depth.
+        let distance = source.pos.x + source.size.x - tile.pos.x;
+        moved.pos.x += (distance / GRID).ceil() * GRID;
+    }
+    if moved.pos.x + moved.size.x > bounds.x {
+        moved.pos.x = 0.0;
+        moved.pos.y += row_pitch(tile);
+    }
     moved
 }
 
 /// Plan the drop of `held` among `committed`: every committed tile's position
-/// (pushed where the cascade requires) or None if the drop is infeasible.
+/// (pushed sideways / wrapped down where the cascade requires) or None if the
+/// drop is infeasible (something fell off the bottom edge, or the cascade
+/// ping-ponged without resolving).
+///
+/// Pushes are side-aware (left escapes exist), so reading-order rank is not
+/// monotone and cycles are possible; the step budget turns a cyclic cascade
+/// into a prompt None instead of an infinite loop.
 pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Option<Vec<TileRect>> {
     if !fits(held, bounds) {
         return None;
@@ -78,21 +98,20 @@ pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Opti
         } else {
             *result.iter().find(|tile| tile.entity == entity)?
         };
-        for index in 0..result.len() {
-            let tile = result[index];
-            if tile.entity == source.entity || !overlaps(source, tile) {
+        for tile in result.iter_mut() {
+            if tile.entity == source.entity || !overlaps(source, *tile) {
                 continue;
             }
-            let mut moved = push_apart(source, tile);
+            let mut moved = push_apart(source, *tile, bounds);
             // The held tile never moves; a push landing on its cell must
-            // also clear it, even if that means clearing toward the displacer.
+            // also clear it. Rightward re-push keeps the rank monotone.
             if overlaps(held, moved) {
-                moved = push_apart(held, moved);
+                moved = push_apart(held, moved, bounds);
             }
             if !fits(moved, bounds) {
                 return None;
             }
-            result[index] = moved;
+            *tile = moved;
             queue.push_back(moved.entity);
         }
     }
@@ -117,19 +136,42 @@ mod tests {
             .pos
     }
     #[test]
-    fn four_sides() {
+    fn pushes_are_horizontal_and_side_aware() {
+        // Vertical overlaps with coincident centers push right; horizontal
+        // overlaps push away along x — never vertical.
         let other = rect(1, 160.0, 160.0, 80.0);
         for (x, y, expected) in [
             (120.0, 160.0, Vec2::new(200.0, 160.0)),
             (200.0, 160.0, Vec2::new(120.0, 160.0)),
-            (160.0, 120.0, Vec2::new(160.0, 200.0)),
-            (160.0, 200.0, Vec2::new(160.0, 120.0)),
+            (160.0, 120.0, Vec2::new(240.0, 160.0)),
+            (160.0, 200.0, Vec2::new(240.0, 160.0)),
         ] {
             assert_eq!(
                 plan(rect(0, x, y, 80.0), &[other], Vec2::splat(600.0)).unwrap()[0].pos,
                 expected
             );
         }
+    }
+    #[test]
+    fn left_neighbor_nudges_left_not_across() {
+        // Dragging rightward into a tile whose center is left of the held
+        // tile's: a small leftward nudge, NOT a leapfrog across the held
+        // tile to its right side (the "shoved to the zone edge" bug).
+        let committed = [rect(1, 80.0, 0.0, 100.0)];
+        let result = plan(
+            rect(0, 140.0, 0.0, 100.0),
+            &committed,
+            Vec2::splat(600.0),
+        )
+        .unwrap();
+        assert_eq!(pos_of(&result, 1), Vec2::new(40.0, 0.0));
+    }
+    #[test]
+    fn left_escape_at_edge_extends_right() {
+        // No room left of the source: the tile comes back and extends right.
+        let committed = [rect(1, 0.0, 0.0, 100.0)];
+        let result = plan(rect(0, 60.0, 0.0, 100.0), &committed, Vec2::splat(600.0)).unwrap();
+        assert_eq!(pos_of(&result, 1), Vec2::new(160.0, 0.0));
     }
     #[test]
     fn variable_width_cascade_and_repeat() {
@@ -165,7 +207,9 @@ mod tests {
                 .pos,
             tiles[0].pos
         );
-        assert!(plan(held, &tiles, Vec2::new(400.0, 600.0)).is_none());
+        // Narrow bounds force tile 2 to wrap; short bounds then leave no
+        // row below, so the drop is infeasible.
+        assert!(plan(held, &tiles, Vec2::new(400.0, 200.0)).is_none());
         assert_eq!(tiles[0].pos.x, 80.0);
     }
     #[test]
@@ -205,23 +249,25 @@ mod tests {
         }
     }
     #[test]
-    fn push_direction_is_per_pair_not_global() {
-        // One neighbor primarily left of the held tile, one primarily below:
-        // each must move along its own away axis. With a single global
-        // direction (taken from the nearest overlap, the left one) the lower
-        // tile would be shoved sideways instead of down.
-        let committed = [rect(1, 160.0, 200.0, 80.0), rect(2, 210.0, 240.0, 80.0)];
-        let result = plan(rect(0, 200.0, 200.0, 80.0), &committed, Vec2::splat(600.0)).unwrap();
-        assert_eq!(pos_of(&result, 1), Vec2::new(120.0, 200.0));
-        assert_eq!(pos_of(&result, 2), Vec2::new(210.0, 280.0));
-        assert!(!overlaps(result[0], result[1]));
+    fn push_past_right_edge_wraps_to_next_row() {
+        // The tile fills the row up to the right edge; pushing it right by
+        // any amount overflows, so it wraps to x = 0 one row pitch (80px:
+        // the smallest grid multiple >= the 60px test height) down.
+        let committed = [rect(1, 520.0, 0.0, 80.0)];
+        let result = plan(
+            rect(0, 480.0, 0.0, 80.0),
+            &committed,
+            Vec2::splat(600.0),
+        )
+        .unwrap();
+        assert_eq!(pos_of(&result, 1), Vec2::new(0.0, 80.0));
     }
     #[test]
     fn unresolvable_crowd_returns_none_promptly() {
         // A dense ring around the held tile in a tight zone: resolving every
-        // overlap eventually shoves a neighbor out of bounds (or would cycle
-        // against the bounded step budget), so the plan is infeasible —
-        // reported promptly instead of looping or spraying tiles around.
+        // overlap wraps tiles downward until one falls off the bottom, so
+        // the plan is infeasible — reported promptly instead of spraying
+        // tiles around.
         let committed = [
             rect(1, 120.0, 40.0, 80.0),
             rect(2, 160.0, 80.0, 80.0),
@@ -231,23 +277,28 @@ mod tests {
         assert!(plan(rect(0, 80.0, 40.0, 80.0), &committed, Vec2::splat(240.0)).is_none());
     }
     #[test]
-    fn cyclic_cascade_hits_step_budget() {
-        // The two tiles ping-pong against the held tile's cell: pushing one
-        // off the other lands it on the held cell, and clearing that overlap
-        // shoves it back onto its partner. Nothing ever leaves the bounds,
-        // so only the step budget ends it — promptly, with None.
-        let committed = [rect(1, 40.0, 0.0, 40.0), rect(2, 0.0, 0.0, 40.0)];
-        assert!(plan(rect(0, 40.0, 0.0, 160.0), &committed, Vec2::new(200.0, 120.0)).is_none());
+    fn bottom_overflow_returns_none() {
+        // A column of tiles in a one-tile-wide zone: each push overflows the
+        // right edge and wraps a row down, until the last tile wraps past
+        // the bottom. Termination comes from monotone reading-order rank,
+        // not a budget: the cascade simply runs out of rows.
+        let committed = [
+            rect(1, 40.0, 0.0, 80.0),
+            rect(2, 40.0, 80.0, 80.0),
+            rect(3, 0.0, 160.0, 80.0),
+        ];
+        assert!(plan(rect(0, 0.0, 0.0, 80.0), &committed, Vec2::new(120.0, 240.0)).is_none());
     }
     #[test]
     fn push_beyond_bounds_is_infeasible() {
         // The overlapped tile can only escape right, but the zone is too
-        // narrow: None, with no partial plan for callers to apply.
+        // narrow to hold it there and too short to hold the wrapped row:
+        // None, with no partial plan for callers to apply.
         assert!(
             plan(
                 rect(0, 0.0, 0.0, 80.0),
                 &[rect(1, 40.0, 0.0, 80.0)],
-                Vec2::new(120.0, 200.0),
+                Vec2::new(120.0, 100.0),
             )
             .is_none()
         );

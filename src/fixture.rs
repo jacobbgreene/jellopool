@@ -19,9 +19,8 @@
 //! Every entry is planned through `crate::tiles::placement::plan`, so any
 //! authoring overlap is resolved by the same push cascade a real drop uses.
 
+use crate::prelude::*;
 use crate::tiles::placement::{GRID, TileRect, plan};
-use crate::tiles::{PlacedTile, WordTile, WritingZone};
-use bevy::prelude::*;
 
 /// Seed used for word selection whenever `JELLOPOOL_SCENE` is set (and
 /// `JELLOPOOL_SEED` is not). Every scene word below comes from the selection

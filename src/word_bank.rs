@@ -1,6 +1,5 @@
 use crate::fixture::FIXTURE_SEED;
-use crate::states::AppState;
-use bevy::prelude::*;
+use crate::prelude::*;
 use rand::rngs::SmallRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, SeedableRng};
