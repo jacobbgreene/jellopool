@@ -162,6 +162,67 @@ fn regrab_during_slide_keeps_the_visible_grip_point() {
 }
 
 #[test]
+fn regrab_during_wrapping_preserves_the_source_slot_until_moved() {
+    for frames in [1, 3, 8] {
+        let mut f = TrayHarness::new(&[80.0, 140.0, 60.0, 110.0, 70.0], 1.5, 0.8);
+        let held = f.tiles[1];
+        let destination = f.center(f.tiles[4]) + Vec2::X;
+        f.grab(held);
+        f.release(held, destination);
+        for _ in 0..frames {
+            f.step();
+        }
+        let order = f.order();
+        // Re-grab each word at its displayed center while other words are
+        // crossing rows; child order and displayed geometry need not agree.
+        for (index, &tile) in order.iter().enumerate() {
+            let point = f.center(tile);
+            let targets: Vec<_> = order.iter().map(|&entity| f.target(entity)).collect();
+            f.grab(tile);
+            let follow = f.app.world().get::<DragFollow>(tile).unwrap();
+            for (slot, target) in follow.tray_slots.iter().zip(targets) {
+                let anchor = slot.rect.center() / (f.dpi * f.ui_scale);
+                assert!(
+                    anchor.distance(target) <= 1.0 / (f.dpi * f.ui_scale),
+                    "frames={frames}, index={index}, tile={:?}, anchor={anchor:?}, layout={target:?}",
+                    slot.entity
+                );
+            }
+            f.step();
+            f.assert_gap(index);
+            f.release(tile, point);
+            f.assert_released(tile);
+            assert_eq!(f.order(), order);
+            f.step();
+        }
+    }
+}
+
+#[test]
+fn moving_after_a_regrab_uses_frozen_row_major_layout_anchors() {
+    let mut f = TrayHarness::new(&[80.0, 140.0, 60.0, 110.0, 70.0], 1.5, 0.8);
+    let held = f.tiles[1];
+    let destination = f.center(f.tiles[4]) + Vec2::X;
+    f.grab(held);
+    f.release(held, destination);
+    f.step();
+    let last = f.target(held) + Vec2::X;
+    let regrabbed = f.tiles[3];
+    f.grab(regrabbed);
+    f.drag_and_step(regrabbed, last);
+    for _ in 0..30 {
+        f.assert_gap(4);
+        f.step();
+    }
+    f.release(regrabbed, last);
+    f.assert_released(regrabbed);
+    assert_eq!(
+        f.order(),
+        vec![f.tiles[0], f.tiles[2], f.tiles[4], held, regrabbed]
+    );
+}
+
+#[test]
 fn whitespace_between_rows_uses_the_nearest_row_and_horizontal_slot() {
     let slots: Vec<_> = [(0.0, 0.0), (100.0, 0.0), (0.0, 52.0), (100.0, 52.0)]
         .into_iter()

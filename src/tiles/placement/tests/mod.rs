@@ -1,5 +1,6 @@
 use super::*;
 
+mod boundary;
 mod performance;
 
 fn rect(id: u32, x: f32, row: usize, width: f32) -> TileRect {
@@ -105,7 +106,8 @@ fn empty_space_and_touching_edges_never_shift_neighbors() {
         rect(3, 80.0, 1, 160.0),
     ];
     let held = rect(0, 80.0, 0, 160.0);
-    let result = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    let (cell, result) = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    assert_eq!(cell, held.pos);
     for tile in result {
         assert_eq!(
             tile.pos,
@@ -122,7 +124,8 @@ fn empty_space_and_touching_edges_never_shift_neighbors() {
 fn a_small_overlap_only_opens_the_missing_space() {
     let held = rect(0, 80.0, 1, 82.25);
     let neighbors = [rect(1, 160.0, 1, 80.0), rect(2, 300.0, 1, 80.0)];
-    let result = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    let (cell, result) = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    assert_eq!(cell, held.pos);
     assert_eq!(
         result
             .iter()
@@ -148,7 +151,8 @@ fn a_small_overlap_only_opens_the_missing_space() {
 fn overlap_can_shift_left_without_repacking_gaps() {
     let held = rect(0, 150.0, 0, 80.0);
     let neighbors = [rect(1, 0.0, 0, 40.0), rect(2, 80.0, 0, 80.0)];
-    let result = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    let (cell, result) = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    assert_eq!(cell, held.pos);
     assert_eq!(
         result
             .iter()
@@ -178,7 +182,8 @@ fn only_contacting_neighbors_on_the_same_line_can_follow_a_push() {
         rect(3, 160.0, 2, 80.0),
         rect(4, 400.0, 1, 80.0),
     ];
-    let result = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    let (cell, result) = plan(held, &neighbors, Vec2::splat(640.0)).unwrap();
+    assert_eq!(cell, held.pos);
     for (before, x) in neighbors.iter().zip([170.0, 250.0, 160.0, 400.0]) {
         let after = result
             .iter()
@@ -197,11 +202,12 @@ fn full_line_rejects_without_wrapping_or_mutating_input() {
 }
 
 #[test]
-fn blocked_side_can_open_space_on_the_other_side_of_the_word() {
+fn blocked_left_side_nudges_the_held_word_instead_of_swapping_order() {
     let held = rect(0, 100.0, 0, 80.0);
     let neighbor = rect(1, 0.0, 0, 150.0);
-    let result = plan(held, &[neighbor], Vec2::splat(640.0)).unwrap();
-    assert_eq!(result[0].pos.x, 180.0);
+    let (cell, result) = plan(held, &[neighbor], Vec2::splat(640.0)).unwrap();
+    assert_eq!(cell.x, 150.0);
+    assert_eq!(result[0].pos, neighbor.pos);
 }
 
 #[test]
@@ -243,8 +249,14 @@ fn randomized_plans_preserve_geometry_lines_and_empty_space() {
             }
         }
         let touching = neighbors.iter().any(|tile| overlaps(held, *tile));
-        if let Some(result) = plan(held, &neighbors, bounds) {
-            assert!(valid_result(held, &result, bounds));
+        if let Some((cell, result)) = plan(held, &neighbors, bounds) {
+            let resolved = TileRect { pos: cell, ..held };
+            assert!(fits(resolved, bounds));
+            assert!(valid_result(resolved, &result, bounds));
+            assert_eq!(cell.y, held.pos.y);
+            if !touching {
+                assert_eq!(cell, held.pos);
+            }
             assert_eq!(result.len(), neighbors.len());
             for after in &result {
                 let before = neighbors
@@ -255,6 +267,21 @@ fn randomized_plans_preserve_geometry_lines_and_empty_space() {
                 assert_eq!(after.pos.y, before.pos.y);
                 if !touching || before.pos.y != held.pos.y {
                     assert_eq!(after.pos, before.pos);
+                }
+                if before.pos.y == held.pos.y {
+                    let before_held =
+                        before.pos.x + before.size.x * 0.5 < held.pos.x + held.size.x * 0.5;
+                    assert_eq!(after.pos.x < cell.x, before_held);
+                }
+                for other in result
+                    .iter()
+                    .filter(|tile| tile.pos.y == after.pos.y && tile.entity != after.entity)
+                {
+                    let original = neighbors
+                        .iter()
+                        .find(|tile| tile.entity == other.entity)
+                        .unwrap();
+                    assert_eq!(after.pos.x < other.pos.x, before.pos.x < original.pos.x);
                 }
             }
         }

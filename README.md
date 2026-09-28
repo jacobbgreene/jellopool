@@ -38,8 +38,11 @@ error instead of silently producing fewer than 40 tiles.
 
 Hold either Shift key at any point to phase the held tile: it dims and passes
 over words without pushing. Release Shift to resume pushing. A drop still makes
-room for the word even while Shift is held. If the line has no room, the drop
-returns the held tile to the tray.
+room for the word even while Shift is held. If inserting between words would
+push a left neighbor off the page, the left-side words stay fixed: the held tile
+moves just clear of them and pushes only the right-side chain. The intended word
+order never changes to squeeze in a drop; if that insertion cannot fit, the held
+tile returns to the tray.
 
 The top strip is reserved for future menu controls. Line 1 starts at the screen's
 vertical center; the whitespace and title scroll away with the page. Click the
@@ -47,6 +50,10 @@ title field (or press Tab) to name the poem. It supports selection, copy/paste,
 and Unicode input, up to 120 characters on one line. Enter, Escape, or clicking
 outside finishes editing. Titles, like the current tile arrangement, are
 session-only; saving is not implemented yet.
+
+A future save format needs the title, selected words with stable tile identities,
+placed positions, and tray membership/order. A seed alone is not enough to restore
+a session across word-bank changes; normal play does not retain a selection seed.
 
 Escape cancels the entire drag, including its pushes. Pointer cancellation and
 focus loss likewise restore the held tile and all neighbors to their positions
@@ -72,8 +79,9 @@ suites split by behavior, with fixtures in a dedicated `harness.rs`:
 
 - `src/test_support/`: deterministic clock, pointer input, camera/layout setup,
   and the timing helper. No feature-specific entities or expected outcomes.
-- `src/tiles/drag/tests/`: lifecycle, ownership, cancellation, coordinates, Shift phasing,
-  and an opt-in performance suite, all using one drag harness.
+- `src/tiles/drag/tests/`: lifecycle, ownership, cancellation, coordinates,
+  Shift phasing, boundary insertion, and an opt-in performance suite, all using
+  one drag harness.
 - `src/tiles/tray/tests/`: real wrapping-layout checks and an opt-in performance
   suite, sharing a separate tray harness. `word_selection.rs` adds shipped-font
   shaping/layout checks for 1,024 seeds at three size/DPI combinations and for
@@ -120,10 +128,8 @@ These are rendered smoke checks and human-review artifacts, **not pixel-baseline
 comparisons**. They are separate from the fast correctness suite and the opt-in
 CPU benchmarks above.
 
-The following notes are local-only in the ignored `docs/` folder.
-For deterministic scenes, screenshots, and module boundaries, see
-[development notes](docs/development.md). The current visual direction is
-described in the [visual review](docs/visual-review.md).
-The [performance review](docs/performance-review.md) records the earlier
-freeform-board baseline. The numbered-line planner replaces that cascade;
-run the benchmark command above for current measurements.
+Optional local notes live in the ignored `docs/` folder and are not included in a
+fresh clone: `docs/development.md` (development workflow), `docs/visual-review.md`
+(visual direction), and `docs/performance-review.md` (the earlier freeform-board
+baseline). The numbered-line planner replaces that baseline's cascade; run the
+benchmark command above for current measurements.

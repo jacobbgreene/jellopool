@@ -27,11 +27,15 @@ fn escape_restores_held_and_rolls_back_neighbors() {
                 grab_offset: Vec2::ZERO,
                 target: Vec2::ZERO,
                 pointer: Vec2::ZERO,
+                start_pointer: Vec2::ZERO,
                 origin: Some(origin),
                 tray_index: 0,
                 tray_slots: Vec::new(),
                 pushes: Vec::new(),
-                last_cell: Some(origin),
+                last_placement: Some(DragPlacement {
+                    requested: origin,
+                    resolved: origin,
+                }),
                 phased: false,
             },
         ))

@@ -199,7 +199,7 @@ pub fn apply_fixture_scene(
             pos: cell,
             size,
         };
-        let Some(moved) = plan(held, &committed, bounds) else {
+        let Some((cell, moved)) = plan(held, &committed, bounds) else {
             error!("fixture: no feasible plan for {word:?} at cell {cell:?}");
             exit.write(AppExit::error());
             commands.remove_resource::<PendingFixture>();

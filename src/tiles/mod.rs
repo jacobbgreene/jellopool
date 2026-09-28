@@ -14,7 +14,7 @@ use animation::{
 };
 pub use drag::PlacedTile;
 use drag::{
-    ActiveDrag, PlacementPreview, cancel_drag_system, tile_follow_system, update_placement_preview,
+    ActiveDrag, PlacementPreview, cancel_drag_system, resolve_drag_placement, tile_follow_system,
 };
 use presentation::TILE_RADIUS;
 pub use presentation::{spawn_all_tiles, spawn_board_root};
@@ -72,7 +72,7 @@ fn register_interaction_systems(app: &mut App) {
             (
                 scroll_input_system,
                 cancel_drag_system,
-                update_placement_preview,
+                resolve_drag_placement,
                 tile_follow_system,
                 phase_appearance_system,
                 tile_feel_system,

@@ -26,6 +26,8 @@ fn fits(tile: TileRect, bounds: Vec2) -> bool {
         && (tile.pos + tile.size).cmple(bounds).all()
 }
 
+/// Geometry/identity checks only. The planner preserves the chosen insertion
+/// order by construction; behavioral tests check that separately.
 fn valid_result(held: TileRect, result: &[TileRect], bounds: Vec2) -> bool {
     result.iter().enumerate().all(|(index, tile)| {
         tile.entity != held.entity
@@ -37,19 +39,23 @@ fn valid_result(held: TileRect, result: &[TileRect], bounds: Vec2) -> bool {
     })
 }
 
-/// Open only the space needed for an actual overlap, preserving reading order
-/// and every tile's line. Try insertion boundaries through the covered words,
-/// preferring the side indicated by the word's center, with the smallest
-/// displacement fallback if that side is blocked. No wrapping, repacking, or push
-/// into another line; a full line rejects the entire plan.
-pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Option<Vec<TileRect>> {
+/// Open only the space needed for an actual overlap, preserving the insertion
+/// order indicated by the word's center and every tile's line. If a leftward
+/// push would cross the page edge, leave the entire left side fixed, move the
+/// held tile just clear of it, and push only to the right. Never switch insertion
+/// slots to make a plan fit: insufficient right-side room rejects the plan.
+pub(crate) fn plan(
+    mut held: TileRect,
+    committed: &[TileRect],
+    bounds: Vec2,
+) -> Option<(Vec2, Vec<TileRect>)> {
     if !fits(held, bounds) {
         return None;
     }
     let mut result = committed.to_vec();
     result.sort_by_key(|tile| tile.entity.to_bits());
     if !result.iter().any(|tile| overlaps(held, *tile)) {
-        return valid_result(held, &result, bounds).then_some(result);
+        return valid_result(held, &result, bounds).then_some((held.pos, result));
     }
     let mut row: Vec<_> = result
         .iter()
@@ -64,52 +70,36 @@ pub(crate) fn plan(held: TileRect, committed: &[TileRect], bounds: Vec2) -> Opti
             .total_cmp(&result[b].pos.x)
             .then_with(|| result[a].entity.to_bits().cmp(&result[b].entity.to_bits()))
     });
-    let first = row
-        .iter()
-        .position(|&index| overlaps(held, result[index]))?;
-    let last = row
-        .iter()
-        .rposition(|&index| overlaps(held, result[index]))?
-        + 1;
     let center = held.pos.x + held.size.x * 0.5;
-    let preferred = row
+    let split = row
         .iter()
         .take_while(|&&index| result[index].pos.x + result[index].size.x * 0.5 < center)
         .count();
-    let mut best: Option<(f32, Vec<TileRect>)> = None;
-    for split in
-        std::iter::once(preferred).chain((first..=last).filter(|split| *split != preferred))
-    {
-        let mut candidate = result.clone();
+
+    // Check the complete left chain before moving anything, so a boundary
+    // fallback preserves existing left-side gaps as well as word positions.
+    let left_edge = row[..split].iter().rev().fold(held.pos.x, |edge, &index| {
+        result[index].pos.x.min(edge - result[index].size.x)
+    });
+    if left_edge < 0.0 {
+        if let Some(&index) = row[..split].last() {
+            held.pos.x = result[index].pos.x + result[index].size.x;
+        }
+    } else {
         let mut edge = held.pos.x;
         for &index in row[..split].iter().rev() {
-            let tile = &mut candidate[index];
+            let tile = &mut result[index];
             tile.pos.x = tile.pos.x.min(edge - tile.size.x);
             edge = tile.pos.x;
         }
-        edge = held.pos.x + held.size.x;
-        for &index in &row[split..] {
-            let tile = &mut candidate[index];
-            tile.pos.x = tile.pos.x.max(edge);
-            edge = tile.pos.x + tile.size.x;
-        }
-        if candidate.iter().any(|tile| !fits(*tile, bounds)) {
-            continue;
-        }
-        if split == preferred {
-            return valid_result(held, &candidate, bounds).then_some(candidate);
-        }
-        let distance: f32 = candidate
-            .iter()
-            .zip(&result)
-            .map(|(after, before)| (after.pos.x - before.pos.x).abs())
-            .sum();
-        if best.as_ref().is_none_or(|(cost, _)| distance < *cost) {
-            best = Some((distance, candidate));
-        }
     }
-    let (_, result) = best?;
-    valid_result(held, &result, bounds).then_some(result)
+    let mut edge = held.pos.x + held.size.x;
+    for &index in &row[split..] {
+        let tile = &mut result[index];
+        tile.pos.x = tile.pos.x.max(edge);
+        edge = tile.pos.x + tile.size.x;
+    }
+    (fits(held, bounds) && valid_result(held, &result, bounds)).then_some((held.pos, result))
 }
 
 /// Continue a live push without letting a fast horizontal move tunnel through
@@ -122,11 +112,11 @@ pub(crate) fn push(
     bounds: Vec2,
 ) -> Option<(Vec2, Vec<TileRect>)> {
     let Some(from) = previous.filter(|from| from.y == held.pos.y && from.x != held.pos.x) else {
-        return plan(held, neighbors, bounds).map(|result| (held.pos, result));
+        return plan(held, neighbors, bounds);
     };
     let start = TileRect { pos: from, ..held };
     if !fits(start, bounds) || !valid_result(start, neighbors, bounds) {
-        return plan(held, neighbors, bounds).map(|result| (held.pos, result));
+        return plan(held, neighbors, bounds);
     }
     let right = held.pos.x > from.x;
     let mut result = neighbors.to_vec();

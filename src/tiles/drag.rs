@@ -17,6 +17,7 @@ type TileGrabQuery<'w, 's> = Query<
         &'static UiGlobalTransform,
         &'static mut Node,
         Option<&'static PlacedTile>,
+        Option<&'static TrayMotion>,
     ),
     With<WordTile>,
 >;
@@ -62,14 +63,35 @@ pub struct DragFollow {
     target: Vec2,
     /// Latest pointer position in physical viewport pixels, for region hit tests.
     pub(super) pointer: Vec2,
+    start_pointer: Vec2,
     origin: Option<Vec2>,
     tray_index: usize,
     pub(super) tray_slots: Vec<TraySlot>,
     /// Transactional working arrangement: pushes persist during the gesture,
     /// but PlacedTile remains the rollback baseline until release.
     pub(super) pushes: Vec<TileRect>,
-    last_cell: Option<Vec2>,
+    last_placement: Option<DragPlacement>,
     pub(super) phased: bool,
+}
+
+impl DragFollow {
+    pub(super) fn tray_slot(&self, pointer: Vec2) -> usize {
+        // A re-grab can begin between animated rows. Picking up and releasing
+        // without pointer motion must keep its source slot, not reinterpret it.
+        if self.origin.is_none() && pointer == self.start_pointer {
+            self.tray_index
+        } else {
+            insertion_slot(&self.tray_slots, pointer)
+        }
+    }
+}
+
+/// Keep pointer intent separate from the collision-resolved cell. A boundary
+/// nudge is not pointer movement and must not start a reverse push next frame.
+#[derive(Clone, Copy)]
+struct DragPlacement {
+    requested: Vec2,
+    resolved: Vec2,
 }
 
 /// Reserve synchronously, before DragFollow's deferred insertion is visible.
@@ -102,7 +124,9 @@ pub(super) struct PreviewPlan {
 #[derive(Component)]
 pub(super) struct CancelDrag;
 
-pub(super) fn update_placement_preview(
+/// Resolve the gesture's working positions and pointer constraints, then publish
+/// the landing highlight. Presentation systems apply these resolved targets.
+pub(super) fn resolve_drag_placement(
     keys: Res<ButtonInput<KeyCode>>,
     zone: Single<(&ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     viewports: Viewports,
@@ -117,7 +141,7 @@ pub(super) fn update_placement_preview(
     };
     follow.phased = phase_held(&keys);
     if follow.phased {
-        follow.last_cell = None;
+        follow.last_placement = None;
     }
     // Recompute even without pointer motion: Shift can release a blocked tile.
     follow.target = follow.pointer * node.inverse_scale_factor - follow.grab_offset;
@@ -130,25 +154,22 @@ pub(super) fn update_placement_preview(
         size,
         geometry,
         &follow.pushes,
-        follow.last_cell,
+        follow.last_placement,
     );
-    preview.0 = if let Some((cell, moved)) = placement {
+    preview.0 = if let Some((position, moved)) = placement {
+        let cell = position.resolved;
         if !follow.phased {
-            // Only constrain horizontal following when the pushed chain meets
-            // a page edge. Otherwise retain the exact pointer grip.
-            let requested = snap_to_line(
-                follow.target - geometry.origin * geometry.inverse_scale,
-                geometry.bounds - size,
-            );
-            if cell.x != requested.x {
+            // Constrain horizontal following at a blocked chain or a boundary
+            // insertion. Otherwise retain the exact pointer grip.
+            if cell.x != position.requested.x {
                 follow.target.x = geometry.origin.x * geometry.inverse_scale + cell.x;
             }
             follow.pushes = moved;
-            follow.last_cell = Some(cell);
+            follow.last_placement = Some(position);
         }
         Some(PreviewPlan { cell, size })
     } else {
-        follow.last_cell = None;
+        follow.last_placement = None;
         None
     };
 }
@@ -168,8 +189,8 @@ fn placement_at(
     size: Vec2,
     zone: WritingGeometry,
     committed: &[TileRect],
-    previous: Option<Vec2>,
-) -> Option<(Vec2, Vec<TileRect>)> {
+    previous: Option<DragPlacement>,
+) -> Option<(DragPlacement, Vec<TileRect>)> {
     if !zone.visible.contains(pointer) {
         return None;
     }
@@ -179,17 +200,39 @@ fn placement_at(
         return None;
     }
     let top_left = zone.origin * inv;
-    let cell = snap_to_line(pointer * inv - grab_offset - top_left, bounds - size);
+    let requested = snap_to_line(pointer * inv - grab_offset - top_left, bounds - size);
+    let mut cell = requested;
+    if let Some(previous) = previous.filter(|previous| previous.requested.y == requested.y) {
+        // While the pointer catches up with a boundary nudge, keep the tile
+        // still. Neither a stationary nor a rightward pointer should push left
+        // merely because the resolved tile sits to the right of the pointer.
+        cell.x = if requested.x > previous.requested.x {
+            requested.x.max(previous.resolved.x)
+        } else if requested.x < previous.requested.x {
+            requested.x.min(previous.resolved.x)
+        } else {
+            previous.resolved.x
+        };
+    }
     push(
         TileRect {
             entity,
             pos: cell,
             size,
         },
-        previous,
+        previous.map(|previous| previous.resolved),
         committed,
         bounds,
     )
+    .map(|(resolved, moved)| {
+        (
+            DragPlacement {
+                requested,
+                resolved,
+            },
+            moved,
+        )
+    })
 }
 
 /// Lines guide vertical placement; x remains under the writer's control.
@@ -262,15 +305,22 @@ pub fn tile_drag_start(
         .into_iter()
         .flat_map(|children| children.iter())
         .filter_map(|entity| {
-            let (node, _, transform, _, _) = tiles.get(entity).ok()?;
+            let (node, _, transform, _, _, motion) = tiles.get(entity).ok()?;
+            // Flex child order describes the unanimated rows, not the displayed
+            // transforms of words still crossing rows after a previous drop.
+            let center = motion
+                .and_then(|motion| motion.layout_center)
+                .map_or(transform.translation, |center| {
+                    center / node.inverse_scale_factor
+                });
             Some(TraySlot {
                 entity,
-                rect: Rect::from_center_size(transform.translation, node.size),
+                rect: Rect::from_center_size(center, node.size),
                 is_held: entity == event.entity,
             })
         })
         .collect();
-    let Ok((computed, camera, transform, mut node, placed)) = tiles.get_mut(event.entity) else {
+    let Ok((computed, camera, transform, mut node, placed, _)) = tiles.get_mut(event.entity) else {
         return;
     };
 
@@ -323,11 +373,15 @@ pub fn tile_drag_start(
             grab_offset: pointer_logical - top_left,
             target: top_left,
             pointer,
+            start_pointer: pointer,
             origin: placed.map(|placed| placed.0),
             tray_index,
             tray_slots,
             pushes,
-            last_cell: placed.map(|placed| placed.0),
+            last_placement: placed.map(|placed| DragPlacement {
+                requested: placed.0,
+                resolved: placed.0,
+            }),
             phased: false,
         })
         .insert(TileFeel {
@@ -405,7 +459,7 @@ pub fn tile_drag_end(
         if phase_held(&keys) {
             None
         } else {
-            follow.last_cell
+            follow.last_placement
         },
     );
 
@@ -436,7 +490,8 @@ pub fn tile_drag_end(
             shadow_target: 0.0,
         });
 
-    if let Some((to, _)) = placement {
+    if let Some((position, _)) = placement {
+        let to = position.resolved;
         // Keep the tile where it appears on screen, expressed as an offset
         // from the writing zone's top-left, then play the snap into the
         // highlighted cell.
@@ -463,7 +518,7 @@ pub fn tile_drag_end(
         commands.entity(event.entity).remove::<PlacedTile>();
         // Recompute from the release event, even if no preview frame ran.
         let slot = if tray_node.contains_point(*tray_transform, pointer) {
-            insertion_slot(&follow.tray_slots, pointer)
+            follow.tray_slot(pointer)
         } else {
             follow.tray_slots.len()
         };
@@ -471,10 +526,10 @@ pub fn tile_drag_end(
         node.position_type = PositionType::Relative;
         node.left = Val::Auto;
         node.top = Val::Auto;
-        commands.entity(event.entity).insert(TrayMotion {
-            center: pointer * computed.inverse_scale_factor - follow.grab_offset
+        commands.entity(event.entity).insert(TrayMotion::new(
+            pointer * computed.inverse_scale_factor - follow.grab_offset
                 + computed.size * computed.inverse_scale_factor * 0.5,
-        });
+        ));
         commands
             .entity(tray_entity)
             .insert_children(index, &[event.entity]);
@@ -545,9 +600,9 @@ pub fn cancel_drag_system(
             node.left = Val::Auto;
             node.top = Val::Auto;
             let index = child_index(tray_children, &gaps, &follow.tray_slots, follow.tray_index);
-            commands.entity(entity).insert(TrayMotion {
-                center: transform.translation * computed.inverse_scale_factor,
-            });
+            commands.entity(entity).insert(TrayMotion::new(
+                transform.translation * computed.inverse_scale_factor,
+            ));
             commands
                 .entity(tray_entity)
                 .insert_children(index, &[entity]);

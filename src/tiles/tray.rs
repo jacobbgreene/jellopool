@@ -26,9 +26,22 @@ pub(super) struct TraySlot {
 pub struct TrayMotion {
     /// Last displayed center, in logical viewport coordinates.
     pub center: Vec2,
+    /// Unanimated flex position, also logical. A fresh return to the tray has
+    /// no layout target until PostUpdate; later grabs freeze these row anchors.
+    pub layout_center: Option<Vec2>,
+}
+
+impl TrayMotion {
+    pub(super) fn new(center: Vec2) -> Self {
+        Self {
+            center,
+            layout_center: None,
+        }
+    }
 }
 
 pub(super) fn insertion_slot(slots: &[TraySlot], pointer: Vec2) -> usize {
+    // Slots must stay in flex child order: rows top-to-bottom, tiles left-to-right.
     // Pick the nearest row first, including the whitespace between rows.
     // Testing each tile's vertical bounds independently treats row gaps as
     // the end of a row regardless of the pointer's horizontal position.
@@ -119,10 +132,13 @@ pub fn tray_gap_system(
     let preview = dragged
         .single()
         .ok()
-        .filter(|(follow, _)| node.contains_point(*transform, follow.pointer));
-    let index = preview.map(|(follow, _)| insertion_slot(&follow.tray_slots, follow.pointer));
+        .filter(|(follow, _)| node.contains_point(*transform, follow.pointer))
+        .map(|(follow, tile)| {
+            let index = follow.tray_slot(follow.pointer);
+            (follow, tile, index)
+        });
     if let Ok(gap) = gap_slots.single()
-        && index == Some(gap.index)
+        && preview.is_some_and(|(_, _, index)| index == gap.index)
     {
         return;
     }
@@ -132,8 +148,7 @@ pub fn tray_gap_system(
     for gap in &gaps {
         commands.entity(gap).despawn();
     }
-    if let Some((follow, tile)) = preview {
-        let index = index.unwrap();
+    if let Some((follow, tile, index)) = preview {
         spawn_gap(
             &mut commands,
             tray_entity,
@@ -172,11 +187,13 @@ pub fn tray_slide_system(
         };
         let target = transform.translation * node.inverse_scale_factor;
         let Some(mut motion) = motion else {
-            commands
-                .entity(entity)
-                .insert(TrayMotion { center: target });
+            commands.entity(entity).insert(TrayMotion {
+                center: target,
+                layout_center: Some(target),
+            });
             continue;
         };
+        motion.layout_center = Some(target);
         motion.center = if motion.center.distance(target) < 0.5 {
             target
         } else {
