@@ -7,7 +7,9 @@ use bevy::input_focus::{
     FocusCause, FocusGained, FocusedInput, InputFocus,
     tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
 };
-use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, LineHeight};
+use bevy::text::{
+    EditableText, EditableTextFilter, EditableTextSystems, LineHeight, TextCursorStyle,
+};
 use bevy::window::WindowFocused;
 
 #[derive(Component, Default, Clone)]
@@ -45,16 +47,13 @@ pub(super) fn title_scene(font: Handle<Font>, title: String) -> impl Scene {
         TabGroup::new(0)
         Node {
             position_type: PositionType::Absolute, left: px(PAGE_LEFT), right: px(PAGE_RIGHT), bottom: px(88),
-            flex_direction: FlexDirection::Column, row_gap: px(8),
+            flex_direction: FlexDirection::Column,
         }
         Children [
             (
-                Text("POEM TITLE") text_style(font.clone(), 11.0, Color::from(SIGNATURE))
-                template_value(LineHeight::Px(16.0)) Pickable::IGNORE
-            ),
-            (
                 Name("poem_title") PoemTitle TabIndex(0)
                 template_value(editor)
+                TextCursorStyle { color: Color::from(INK) }
                 // Also filter pasted and IME text, not just the Enter key.
                 template_value(EditableTextFilter::new(|c| !c.is_control() && c != '\u{2028}' && c != '\u{2029}'))
                 text_style(font.clone(), 32.0, Color::from(INK))
@@ -63,7 +62,7 @@ pub(super) fn title_scene(font: Handle<Font>, title: String) -> impl Scene {
                 LayoutConfig { use_rounding: false }
                 Node { width: percent(100), height: px(50), border: UiRect::bottom(px(1)), overflow: Overflow::clip() }
                 Children [(
-                    Name("poem_title_placeholder") TitlePlaceholder Text("Give this poem a title")
+                    Name("poem_title_placeholder") TitlePlaceholder Text("Give this poem a title.")
                     text_style(font, 32.0, Color::srgba(0.600, 0.616, 0.584, 1.0))
                     template_value(LineHeight::Px(44.0)) TextLayout::no_wrap() Pickable::IGNORE
                     Node { position_type: PositionType::Absolute, left: px(0), top: px(0) }
@@ -129,9 +128,10 @@ fn blur_on_window_loss(
 }
 
 fn sync_title_chrome(
+    time: Res<Time>,
     focus: Res<InputFocus>,
     mut title: Query<(Entity, &EditableText, &mut BorderColor), With<PoemTitle>>,
-    mut placeholder: Query<&mut Visibility, With<TitlePlaceholder>>,
+    mut placeholder: Query<(&mut Visibility, &mut Text), With<TitlePlaceholder>>,
 ) {
     let Ok((entity, editor, mut border)) = title.single_mut() else {
         return;
@@ -146,9 +146,18 @@ fn sync_title_chrome(
     } else {
         Visibility::Hidden
     };
-    for mut current in &mut placeholder {
+    let frames = [
+        "Give this poem a title.",
+        "Give this poem a title..",
+        "Give this poem a title...",
+    ];
+    let frame = (time.elapsed().as_millis() / 450 % frames.len() as u128) as usize;
+    for (mut current, mut text) in &mut placeholder {
         if *current != visibility {
             *current = visibility;
+        }
+        if visibility != Visibility::Hidden && text.0 != frames[frame] {
+            text.0 = frames[frame].into();
         }
     }
 }

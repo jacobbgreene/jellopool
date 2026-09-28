@@ -15,6 +15,7 @@ fn editor_app() -> (App, Entity, Entity) {
         EditableTextInputPlugin,
         TitlePlugin,
     ))
+    .init_resource::<Time>()
     .init_resource::<UiScale>()
     .init_resource::<FontCx>()
     .init_resource::<LayoutCx>()
