@@ -37,6 +37,7 @@ fn load_assets(mut commands: Commands, server: Res<AssetServer>, options: Res<Ga
 fn finish_loading(
     server: Res<AssetServer>,
     assets: Res<GameAssets>,
+    word_banks: Res<Assets<WordBank>>,
     mut next: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
     mut started: Local<Option<std::time::Instant>>,
@@ -64,6 +65,15 @@ fn finish_loading(
         }
     };
     if ready {
+        let validation = word_banks
+            .get(&assets.words)
+            .ok_or_else(|| "loaded word bank asset is missing".to_string())
+            .and_then(WordBank::validate);
+        if let Err(error) = validation {
+            error!("Cannot start game: {error}");
+            exit.write(AppExit::error());
+            return;
+        }
         next.set(AppState::Playing);
     } else if started.elapsed() > std::time::Duration::from_secs(30) {
         error!("Cannot start game: asset loading timed out");

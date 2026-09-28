@@ -7,6 +7,7 @@ edition = "2024"
 bevy = { version = "0.19", default-features = false, features = [
     "std", "multi_threaded", "bevy_winit", "ui_bevy_render", "ui_picking",
     "png", "x11", "wayland", "touch", "sysinfo_plugin",
+    "bevy_ui_widgets", "system_clipboard",
 ] }
 bevy_common_assets = { version = "0.17.0", features = ["ron"] }
 rand = "0.10.1"

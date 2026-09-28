@@ -6,7 +6,7 @@
 //! registered (see devtools/mod.rs).
 //!
 //! Activation:
-//!   - `JELLOPOOL_SCENE=empty|poem|dense|scattered|edge|scrolled` — scene to commit. Setting
+//!   - `JELLOPOOL_SCENE=empty|poem|dense|scattered|edge|scrolled|push|phase` — scene to commit. Setting
 //!     it also implies `JELLOPOOL_SEED = FIXTURE_SEED` unless overridden, so
 //!     the scene's words always exist in the tray.
 //!   - `JELLOPOOL_WINDOWED` / `JELLOPOOL_SCALE_FACTOR` — the matching window
@@ -67,12 +67,12 @@ const SCATTERED: [SceneEntry; 7] = [
 
 /// A deliberately odd little arrangement for judging type and visual hierarchy.
 const POEM: [SceneEntry; 6] = [
-    ("the", 8, 5),
-    ("moss", 10, 5),
-    ("had", 8, 7),
-    ("a", 10, 7),
-    ("weapon", 12, 7),
-    ("perhaps", 8, 9),
+    ("the", 0, 0),
+    ("moss", 2, 0),
+    ("had", 0, 1),
+    ("a", 2, 1),
+    ("weapon", 4, 1),
+    ("perhaps", 0, 3),
 ];
 
 /// Visible page extremes at the reference viewport.
@@ -97,7 +97,7 @@ const SCROLLED: [SceneEntry; 6] = [
 /// The scene chosen at startup, made a resource so the OnEnter system can
 /// arm the pending placement.
 #[derive(Resource, Clone, Copy)]
-pub struct FixtureScene(&'static [SceneEntry], f32);
+pub struct FixtureScene(&'static [SceneEntry], f32, pub(super) Option<bool>);
 
 /// Present while a fixture scene still needs to be committed. Removed once
 /// the scene has been applied (or given up on).
@@ -111,7 +111,7 @@ pub(crate) struct PendingFixture {
 pub fn parse_scene(value: &str) -> Result<FixtureScene, String> {
     let scene: &'static [SceneEntry] = match value {
         "empty" => &[],
-        "poem" => &POEM,
+        "poem" | "push" | "phase" => &POEM,
         "dense" => &DENSE,
         "scattered" => &SCATTERED,
         "edge" => &EDGE,
@@ -125,6 +125,7 @@ pub fn parse_scene(value: &str) -> Result<FixtureScene, String> {
         } else {
             0.0
         },
+        matches!(value, "push" | "phase").then_some(value == "phase"),
     ))
 }
 
@@ -152,6 +153,7 @@ pub fn apply_fixture_scene(
     mut tiles: Query<(Entity, &Name, &ComputedNode, &mut Node), With<WordTile>>,
     text: Query<&TextLayoutInfo, With<Text>>,
     mut viewport: Query<(&ComputedNode, &mut ScrollPosition), With<WritingViewport>>,
+    mut title: Query<&mut bevy::text::EditableText, With<crate::tiles::title::PoemTitle>>,
     mut exit: MessageWriter<AppExit>,
     mut frames_waited: Local<u32>,
 ) {
@@ -239,6 +241,11 @@ pub fn apply_fixture_scene(
             .scroll
             .min((node.content_size.y - node.size.y).max(0.0) * node.inverse_scale_factor);
     }
+    if pending.scene == POEM
+        && let Ok(mut title) = title.single_mut()
+    {
+        title.queue_edit(bevy::text::TextEdit::Insert("A small possibility".into()));
+    }
     commands.remove_resource::<PendingFixture>();
 }
 
@@ -249,10 +256,18 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
+    #[test]
+    fn drag_scenes_select_real_words_and_the_requested_mode() {
+        assert!(fixture_selection().iter().any(|word| word == "just"));
+        assert_eq!(parse_scene("push").unwrap().2, Some(false));
+        assert_eq!(parse_scene("phase").unwrap().2, Some(true));
+        assert_eq!(parse_scene("poem").unwrap().2, None);
+    }
+
     fn fixture_selection() -> Vec<String> {
         let text = std::fs::read_to_string("assets/word_bank.ron").unwrap();
         let bank: WordBank = ron::from_str(&text).unwrap();
-        select_words_with_rng(&bank, &mut SmallRng::seed_from_u64(FIXTURE_SEED))
+        select_words_with_rng(&bank, &mut SmallRng::seed_from_u64(FIXTURE_SEED)).unwrap()
     }
 
     /// Scene entries must reference words the fixture seed actually selects,

@@ -1,4 +1,6 @@
 //! Board typography, surfaces and tile construction. No drag decisions.
+#[cfg(test)]
+mod tests;
 use super::drag::{on_tile_drag, tile_drag_end, tile_drag_start};
 use super::placement::{LINE_COUNT, LINE_PITCH};
 use super::writing::{
@@ -7,18 +9,52 @@ use super::writing::{
 use crate::config::GameOptions;
 use crate::prelude::*;
 use crate::word_bank::select_words;
+use bevy::app::AppExit;
 use bevy::text::LineHeight;
 
 // Off-white paper on a cool, pale stock. Tray and gutters share one surface;
 // the words carry the character. Vermilion remains exclusive to the live preview.
-const INK: Srgba = Srgba::new(0.129, 0.145, 0.137, 1.0); // #212523
+pub(super) const INK: Srgba = Srgba::new(0.129, 0.145, 0.137, 1.0); // #212523
 const PAPER: Srgba = Srgba::new(0.965, 0.961, 0.941, 1.0); // #F6F5F0
 const TILE_FACE: Srgba = Srgba::new(0.984, 0.980, 0.961, 1.0); // #FBFAF5
 const BANK: Srgba = Srgba::new(0.914, 0.918, 0.894, 1.0); // #E9EAE4
 const OUTLINE: Srgba = Srgba::new(0.600, 0.616, 0.584, 1.0); // #999D95
-const RULE: Srgba = Srgba::new(0.773, 0.784, 0.745, 1.0); // #C5C8BE
-const SIGNATURE: Srgba = Srgba::new(0.392, 0.416, 0.384, 1.0); // #646A62
+pub(super) const RULE: Srgba = Srgba::new(0.773, 0.784, 0.745, 1.0); // #C5C8BE
+pub(super) const SIGNATURE: Srgba = Srgba::new(0.392, 0.416, 0.384, 1.0); // #646A62
 pub(super) const TILE_RADIUS: f32 = 2.0;
+const MENU_HEIGHT: f32 = 64.0;
+const PAGE_INSET: f32 = 24.0;
+const TRAY_WIDTH_PERCENT: f32 = 78.0;
+
+/// Fixed space for future controls, outside the scrolling page.
+#[derive(Component)]
+pub(super) struct MenuSpace;
+#[derive(Component)]
+pub(super) struct PageLead;
+
+fn page_lead_height(screen_height: f32) -> f32 {
+    // Center the first 40px tile on the screen, not the space above the tray.
+    (screen_height * 0.5 - MENU_HEIGHT - PAGE_INSET - 20.0).max(0.0)
+}
+
+pub(super) fn fit_page_lead(
+    camera: Single<&Camera, With<Camera2d>>,
+    scale: Res<UiScale>,
+    mut leads: Query<&mut Node, With<PageLead>>,
+) {
+    let Some(size) = camera.logical_viewport_size() else {
+        return;
+    };
+    if scale.0 <= 0.0 || size.y <= 0.0 {
+        return;
+    }
+    let height = Val::Px(page_lead_height(size.y / scale.0));
+    for mut node in &mut leads {
+        if node.height != height {
+            node.height = height;
+        }
+    }
+}
 
 /// Keep the full word bank within its allotted area on smaller displays.
 /// Scale the entire UI together so tile layout, grid and drag coordinates use
@@ -50,13 +86,25 @@ pub fn spawn_board_root(mut commands: Commands, assets: Res<GameAssets>) {
         },
         DespawnOnExit(AppState::Playing),
     ));
+    root.with_child((
+        Name::new("menu_space"),
+        MenuSpace,
+        Node {
+            width: Val::Percent(78.0),
+            height: Val::Px(MENU_HEIGHT),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    ));
     root.with_children(|parent| spawn_writing_area(parent, assets.word_font.clone()));
-    root.with_child(get_board_tray())
-        // Hairline over the zone/tray seam, below the drag layer.
-        .with_child(get_separator());
-    if let Some(font) = &assets.signature_font {
-        root.with_child(get_wordmark(font.clone()));
-    }
+    root.with_children(|parent| {
+        let mut tray = parent.spawn(get_board_tray());
+        // Decorations follow the actual tray edge, including unusually tall selections.
+        tray.with_child(get_separator());
+        if let Some(font) = &assets.signature_font {
+            tray.with_child(get_wordmark(font.clone()));
+        }
+    });
     // Spawned last so dragged tiles paint above everything else.
     root.with_child(get_drag_layer());
 }
@@ -83,16 +131,17 @@ pub fn get_board_tray() -> (Name, BoardTray, BackgroundColor, Node) {
     let name = Name::new("board_tray");
     let color = BackgroundColor(Color::from(BANK));
     let node = Node {
-        width: Val::Percent(78.0),
-        height: Val::Percent(23.0),
+        width: Val::Percent(TRAY_WIDTH_PERCENT),
+        // Preserve the normal footprint, but let measured wrapped rows grow it.
+        // Even a valid selection can need more than four rows with this font.
+        min_height: Val::Percent(23.0),
+        flex_shrink: 0.0,
         flex_direction: FlexDirection::Row,
         flex_wrap: FlexWrap::Wrap,
         justify_content: JustifyContent::Center,
         align_content: AlignContent::Center,
         row_gap: Val::Px(8.0),
         column_gap: Val::Px(12.0),
-        // Four rows of 40px slips + three 8px gaps + 20px padding = 204px,
-        // within the reference tray's 207px even for longer word selections.
         padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
         ..default()
     };
@@ -108,9 +157,9 @@ pub fn get_separator() -> (Name, BackgroundColor, Pickable, Node) {
         Pickable::IGNORE,
         Node {
             position_type: PositionType::Absolute,
-            // The zone/tray seam: the tray occupies the bottom 23% of the root.
-            bottom: Val::Percent(23.0),
-            width: Val::Percent(78.0),
+            top: Val::Px(0.0),
+            left: Val::Px(0.0),
+            width: Val::Percent(100.0),
             height: Val::Px(1.0),
             ..default()
         },
@@ -135,8 +184,9 @@ pub fn get_wordmark(font: Handle<Font>) -> impl Bundle {
         Pickable::IGNORE,
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Percent(2.5),
-            bottom: Val::Percent(23.0),
+            // Keep the signature at 2.5vw while parenting it to the centered tray.
+            left: Val::Vw(2.5 - (100.0 - TRAY_WIDTH_PERCENT) * 0.5),
+            bottom: Val::Percent(100.0),
             padding: UiRect::bottom(Val::Px(18.0)),
             ..default()
         },
@@ -153,7 +203,7 @@ fn spawn_writing_area(parent: &mut ChildSpawnerCommands, font: Handle<Font>) {
                 flex_basis: Val::Px(0.0),
                 min_height: Val::Px(0.0),
                 justify_content: JustifyContent::Center,
-                padding: UiRect::vertical(Val::Px(24.0)),
+                padding: UiRect::vertical(Val::Px(PAGE_INSET)),
                 ..default()
             },
         ))
@@ -190,21 +240,37 @@ fn spawn_writing_area(parent: &mut ChildSpawnerCommands, font: Handle<Font>) {
                                     Name::new("writing_page"),
                                     Node {
                                         width: Val::Percent(100.0),
-                                        height: Val::Px(LINE_COUNT as f32 * LINE_PITCH + 48.0),
+                                        align_self: AlignSelf::Start,
+                                        flex_direction: FlexDirection::Column,
+                                        padding: UiRect::bottom(Val::Px(PAGE_INSET)),
                                         flex_shrink: 0.0,
                                         ..default()
                                     },
                                 ))
                                 .with_children(|page| {
                                     page.spawn((
+                                        Name::new("page_lead"),
+                                        PageLead,
+                                        Node {
+                                            height: Val::Px(page_lead_height(900.0)),
+                                            flex_shrink: 0.0,
+                                            ..default()
+                                        },
+                                    ))
+                                    .with_children(|lead| {
+                                        super::title::spawn_title(lead, font.clone())
+                                    });
+                                    page.spawn((
                                         Name::new("writing_zone"),
                                         WritingZone,
                                         Node {
-                                            position_type: PositionType::Absolute,
-                                            left: Val::Px(64.0),
-                                            right: Val::Px(32.0),
-                                            top: Val::Px(24.0),
+                                            margin: UiRect {
+                                                left: Val::Px(64.0),
+                                                right: Val::Px(32.0),
+                                                ..default()
+                                            },
                                             height: Val::Px(LINE_COUNT as f32 * LINE_PITCH),
+                                            flex_shrink: 0.0,
                                             ..default()
                                         },
                                     ))
@@ -297,12 +363,22 @@ pub fn spawn_all_tiles(
     assets: Res<GameAssets>,
     word_banks: Res<Assets<crate::word_bank::WordBank>>,
     options: Res<GameOptions>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let Some(spawned_word_bank) = word_banks.get(&assets.words) else {
+        error!("Cannot spawn tiles: required word bank asset is missing after loading");
+        exit.write(AppExit::error());
         return;
     };
 
-    let selected_words = select_words(spawned_word_bank, options.seed);
+    let selected_words = match select_words(spawned_word_bank, options.seed) {
+        Ok(words) => words,
+        Err(error) => {
+            error!("Cannot spawn tiles: {error}");
+            exit.write(AppExit::error());
+            return;
+        }
+    };
 
     // The tray arranges the tiles; there are no positions to compute.
     commands.entity(*tray).with_children(|tray| {

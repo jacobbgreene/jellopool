@@ -1,5 +1,5 @@
 use super::animation::{HELD_SCALE, SnapAnim, TileFeel};
-use super::placement::{LINE_PITCH, TileRect, plan};
+use super::placement::{LINE_PITCH, TileRect, push};
 use super::tray::{TrayGap, TrayMotion, TraySlot, child_index, insertion_slot, spawn_gap};
 use super::writing::{Viewports, WritingGeometry, geometry as writing_geometry};
 use crate::prelude::*;
@@ -51,6 +51,7 @@ type CancelTiles<'w, 's> = Query<
 /// Present only on the tile currently being dragged. The tile's `Node`
 /// offset follows `target` directly every frame.
 #[derive(Component)]
+#[component(on_remove = release_drag_claim)]
 pub struct DragFollow {
     owner: PointerId,
     button: PointerButton,
@@ -64,9 +65,31 @@ pub struct DragFollow {
     origin: Option<Vec2>,
     tray_index: usize,
     pub(super) tray_slots: Vec<TraySlot>,
+    /// Transactional working arrangement: pushes persist during the gesture,
+    /// but PlacedTile remains the rollback baseline until release.
+    pub(super) pushes: Vec<TileRect>,
+    last_cell: Option<Vec2>,
+    pub(super) phased: bool,
 }
 
-/// Both visual consumers read one plan, computed after pointer updates.
+/// Reserve synchronously, before DragFollow's deferred insertion is visible.
+#[derive(Resource, Default)]
+pub(super) struct ActiveDrag(Option<Entity>);
+
+fn release_drag_claim(
+    mut world: bevy::ecs::world::DeferredWorld,
+    context: bevy::ecs::lifecycle::HookContext,
+) {
+    // One cleanup path for drop, cancellation, removal, and despawn. Do not
+    // unlock until the old component is actually removed at a flush boundary.
+    if let Some(mut active) = world.get_resource_mut::<ActiveDrag>()
+        && active.0 == Some(context.entity)
+    {
+        active.0 = None;
+    }
+}
+
+/// Landing highlight, computed after live pushes or a phase-mode hover.
 /// Release deliberately recomputes from its own event instead of using this cache.
 #[derive(Resource, Default)]
 pub(super) struct PlacementPreview(pub Option<PreviewPlan>);
@@ -74,44 +97,64 @@ pub(super) struct PlacementPreview(pub Option<PreviewPlan>);
 pub(super) struct PreviewPlan {
     pub cell: Vec2,
     pub size: Vec2,
-    pub moved: Vec<TileRect>,
 }
 
 #[derive(Component)]
 pub(super) struct CancelDrag;
 
 pub(super) fn update_placement_preview(
+    keys: Res<ButtonInput<KeyCode>>,
     zone: Single<(&ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     viewports: Viewports,
-    dragged: Query<(Entity, &DragFollow, &ComputedNode), With<WordTile>>,
-    placed: PlacedTiles,
+    mut dragged: Query<(Entity, &mut DragFollow, &ComputedNode), With<WordTile>>,
     mut preview: ResMut<PlacementPreview>,
 ) {
-    let Ok((entity, follow, node)) = dragged.single() else {
+    let Ok((entity, mut follow, node)) = dragged.single_mut() else {
         if preview.0.is_some() {
             preview.0 = None;
         }
         return;
     };
-    let committed: Vec<_> = placed
-        .iter()
-        .filter(|(id, _, _)| *id != entity)
-        .map(|(entity, pos, node)| TileRect {
-            entity,
-            pos: pos.0,
-            size: node.size * node.inverse_scale_factor,
-        })
-        .collect();
+    follow.phased = phase_held(&keys);
+    if follow.phased {
+        follow.last_cell = None;
+    }
+    // Recompute even without pointer motion: Shift can release a blocked tile.
+    follow.target = follow.pointer * node.inverse_scale_factor - follow.grab_offset;
     let size = node.size * node.inverse_scale_factor;
-    preview.0 = placement_at(
+    let geometry = writing_geometry(zone.0, zone.1, viewports.single().ok());
+    let placement = placement_at(
         entity,
         follow.pointer,
         follow.grab_offset,
         size,
-        writing_geometry(zone.0, zone.1, viewports.single().ok()),
-        &committed,
-    )
-    .map(|(cell, moved)| PreviewPlan { cell, size, moved });
+        geometry,
+        &follow.pushes,
+        follow.last_cell,
+    );
+    preview.0 = if let Some((cell, moved)) = placement {
+        if !follow.phased {
+            // Only constrain horizontal following when the pushed chain meets
+            // a page edge. Otherwise retain the exact pointer grip.
+            let requested = snap_to_line(
+                follow.target - geometry.origin * geometry.inverse_scale,
+                geometry.bounds - size,
+            );
+            if cell.x != requested.x {
+                follow.target.x = geometry.origin.x * geometry.inverse_scale + cell.x;
+            }
+            follow.pushes = moved;
+            follow.last_cell = Some(cell);
+        }
+        Some(PreviewPlan { cell, size })
+    } else {
+        follow.last_cell = None;
+        None
+    };
+}
+
+fn phase_held(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)
 }
 
 /// Authoritative zone-relative position, never changed by preview animation.
@@ -125,6 +168,7 @@ fn placement_at(
     size: Vec2,
     zone: WritingGeometry,
     committed: &[TileRect],
+    previous: Option<Vec2>,
 ) -> Option<(Vec2, Vec<TileRect>)> {
     if !zone.visible.contains(pointer) {
         return None;
@@ -136,16 +180,16 @@ fn placement_at(
     }
     let top_left = zone.origin * inv;
     let cell = snap_to_line(pointer * inv - grab_offset - top_left, bounds - size);
-    plan(
+    push(
         TileRect {
             entity,
             pos: cell,
             size,
         },
+        previous,
         committed,
         bounds,
     )
-    .map(|plan| (cell, plan))
 }
 
 /// Lines guide vertical placement; x remains under the writer's control.
@@ -190,12 +234,23 @@ pub fn tile_drag_start(
     cameras: Query<&Camera>,
     mut tiles: TileGrabQuery,
     active: Query<Entity, With<DragFollow>>,
+    mut claim: ResMut<ActiveDrag>,
     tray: Single<(Entity, Option<&Children>), With<BoardTray>>,
     snapping: Query<Entity, (With<PlacedTile>, With<SnapAnim>)>,
+    placed_tiles: PlacedTiles,
 ) {
-    if !active.is_empty() {
+    if event.button != PointerButton::Primary || claim.0.is_some() || !active.is_empty() {
         return;
     }
+    let pushes = placed_tiles
+        .iter()
+        .filter(|(id, _, _)| *id != event.entity)
+        .map(|(entity, placed, node)| TileRect {
+            entity,
+            pos: placed.0,
+            size: node.size * node.inverse_scale_factor,
+        })
+        .collect();
     let (tray_entity, tray_children) = tray.into_inner();
     let tray_index = tray_children
         .into_iter()
@@ -223,6 +278,8 @@ pub fn tile_drag_start(
     else {
         return;
     };
+
+    claim.0 = Some(event.entity);
 
     // Hand any in-flight drop animation to the preview writer.
     for entity in &snapping {
@@ -269,6 +326,9 @@ pub fn tile_drag_start(
             origin: placed.map(|placed| placed.0),
             tray_index,
             tray_slots,
+            pushes,
+            last_cell: placed.map(|placed| placed.0),
+            phased: false,
         })
         .insert(TileFeel {
             scale: 1.0,
@@ -309,12 +369,12 @@ pub fn on_tile_drag(
 pub fn tile_drag_end(
     event: On<Pointer<DragEnd>>,
     cameras: Query<&Camera>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     tray: Single<(Entity, &ComputedNode, &UiGlobalTransform, Option<&Children>), With<BoardTray>>,
     gaps: Query<Entity, With<TrayGap>>,
     zone: Single<(Entity, &ComputedNode, &UiGlobalTransform), With<WritingZone>>,
     viewports: Viewports,
-    placed: PlacedTiles,
     mut tiles: TileDropQuery,
 ) {
     let Ok((computed, camera, transform, follow, mut node)) = tiles.get_mut(event.entity) else {
@@ -335,23 +395,31 @@ pub fn tile_drag_end(
         commands.entity(event.entity).insert(CancelDrag);
         return;
     };
-    let committed: Vec<_> = placed
-        .iter()
-        .filter(|(entity, _, _)| *entity != event.entity)
-        .map(|(entity, pos, node)| TileRect {
-            entity,
-            pos: pos.0,
-            size: node.size * node.inverse_scale_factor,
-        })
-        .collect();
     let placement = placement_at(
         event.entity,
         pointer,
         follow.grab_offset,
         computed.size * computed.inverse_scale_factor,
         zone_geometry,
-        &committed,
+        &follow.pushes,
+        if phase_held(&keys) {
+            None
+        } else {
+            follow.last_cell
+        },
     );
+
+    // Returning the held word to the tray still keeps the pushes. Only an
+    // explicit cancellation rolls the whole gesture back to PlacedTile.
+    for tile in placement
+        .as_ref()
+        .map_or(follow.pushes.as_slice(), |(_, moved)| moved.as_slice())
+    {
+        commands
+            .entity(tile.entity)
+            .remove::<SnapAnim>()
+            .insert(PlacedTile(tile.pos));
+    }
 
     for gap in &gaps {
         commands.entity(gap).despawn();
@@ -368,7 +436,7 @@ pub fn tile_drag_end(
             shadow_target: 0.0,
         });
 
-    if let Some((to, plan)) = placement {
+    if let Some((to, _)) = placement {
         // Keep the tile where it appears on screen, expressed as an offset
         // from the writing zone's top-left, then play the snap into the
         // highlighted cell.
@@ -381,12 +449,6 @@ pub fn tile_drag_end(
         // clamps against a zeroed range rather than an inverted one.
         let max = ((zone_node.size - computed.size) * inv).max(Vec2::ZERO);
         let from = relative.clamp(Vec2::ZERO, max);
-        for tile in plan {
-            commands
-                .entity(tile.entity)
-                .remove::<SnapAnim>()
-                .insert(PlacedTile(tile.pos));
-        }
 
         node.position_type = PositionType::Absolute;
         node.left = Val::Px(from.x);

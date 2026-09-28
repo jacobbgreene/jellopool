@@ -19,6 +19,84 @@ const HIGHLIGHT_FADE_SPEED: f32 = 12.0;
 const HIGHLIGHT_FILL: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.12);
 const HIGHLIGHT_BORDER: Srgba = Srgba::new(0.769, 0.278, 0.196, 0.55);
 
+/// Original colors are captured once, so repeated Shift toggles never compound
+/// alpha and release/cancel restores the exact theme (including the text).
+#[derive(Component)]
+pub(super) struct PhaseAppearance {
+    background: BackgroundColor,
+    border: BorderColor,
+    text: Vec<(Entity, TextColor)>,
+}
+
+type PhaseTiles<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static DragFollow>,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+        Option<&'static Children>,
+        Option<&'static PhaseAppearance>,
+        Option<&'static mut TileFeel>,
+    ),
+    (
+        With<WordTile>,
+        Or<(With<DragFollow>, With<PhaseAppearance>)>,
+    ),
+>;
+
+pub(super) fn phase_appearance_system(
+    mut commands: Commands,
+    mut tiles: PhaseTiles,
+    mut text: Query<&mut TextColor>,
+) {
+    for (entity, follow, mut background, mut border, children, original, feel) in &mut tiles {
+        let phased = follow.is_some_and(|follow| follow.phased);
+        if follow.is_some()
+            && let Some(mut feel) = feel
+        {
+            let target = if phased { 0.15 } else { 1.0 };
+            if feel.shadow_target != target {
+                feel.shadow_target = target;
+            }
+        }
+        if phased && original.is_none() {
+            let mut saved = PhaseAppearance {
+                background: *background,
+                border: *border,
+                text: Vec::new(),
+            };
+            background.0 = background.0.with_alpha(background.0.alpha() * 0.35);
+            let border = &mut *border;
+            for color in [
+                &mut border.top,
+                &mut border.right,
+                &mut border.bottom,
+                &mut border.left,
+            ] {
+                *color = color.with_alpha(color.alpha() * 0.35);
+            }
+            for child in children.into_iter().flat_map(|children| children.iter()) {
+                if let Ok(mut color) = text.get_mut(child) {
+                    saved.text.push((child, *color));
+                    color.0 = color.0.with_alpha(color.0.alpha() * 0.35);
+                }
+            }
+            commands.entity(entity).insert(saved);
+        } else if !phased && let Some(original) = original {
+            *background = original.background;
+            *border = original.border;
+            for &(entity, color) in &original.text {
+                if let Ok(mut current) = text.get_mut(entity) {
+                    *current = color;
+                }
+            }
+            commands.entity(entity).remove::<PhaseAppearance>();
+        }
+    }
+}
+
 /// Snapped tiles the preview writer may move: not dragged, not mid-snap.
 type PlacedNodes<'w, 's> = Query<
     'w,
@@ -249,17 +327,13 @@ pub fn snap_anim_system(
     }
 }
 
-/// One writer for neighbor preview/rollback motion. Drop snaps are excluded.
-pub fn push_preview_system(
-    time: Res<Time>,
-    preview: Res<PlacementPreview>,
-    mut nodes: PlacedNodes,
-) {
+/// One writer for live push/rollback motion. Drop snaps are excluded.
+pub fn push_preview_system(time: Res<Time>, active: Query<&DragFollow>, mut nodes: PlacedNodes) {
     for (entity, placed, mut node) in &mut nodes {
-        let target = preview
-            .0
-            .as_ref()
-            .and_then(|plan| plan.moved.iter().find(|tile| tile.entity == entity))
+        let target = active
+            .single()
+            .ok()
+            .and_then(|follow| follow.pushes.iter().find(|tile| tile.entity == entity))
             .map_or(placed.0, |tile| tile.pos);
         let current = Vec2::new(px_or_zero(node.left), px_or_zero(node.top));
         let pos = if current.distance(target) < 0.5 {

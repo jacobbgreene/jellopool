@@ -61,7 +61,7 @@ pub fn configure(app: &mut App, capture: Capture) {
         .add_plugins(ScheduleRunnerPlugin::run_loop(
             std::time::Duration::from_secs_f64(1.0 / 60.0),
         ))
-        .add_systems(Startup, setup.after(crate::board::spawn_board))
+        .add_systems(Startup, setup.after(crate::board::spawn_camera))
         .add_systems(Update, capture_frame.after(crate::tiles::TileInteraction));
 }
 
@@ -90,6 +90,7 @@ fn capture_frame(
     capture: Res<Capture>,
     state: Res<State<AppState>>,
     pending: Option<Res<super::fixture::PendingFixture>>,
+    pending_drag: Option<Res<super::drag_fixture::PendingDrag>>,
     tiles: Query<(&Name, &ComputedNode, &UiGlobalTransform, &ChildOf), With<WordTile>>,
     regions: Query<(&ComputedNode, &UiGlobalTransform)>,
     text: Query<&TextLayoutInfo, With<Text>>,
@@ -103,6 +104,7 @@ fn capture_frame(
     }
     if *state.get() != AppState::Playing
         || pending.is_some()
+        || pending_drag.is_some()
         || tiles.iter().count() != crate::word_bank::WORD_COUNT
         || text.is_empty()
         || text

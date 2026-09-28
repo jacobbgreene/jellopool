@@ -4,9 +4,9 @@ mod board;
 mod config;
 mod devtools;
 mod loading;
-#[cfg(test)]
-mod performance;
 mod states;
+#[cfg(test)]
+mod test_support;
 mod tiles;
 mod word_bank;
 
@@ -38,7 +38,7 @@ fn main() -> AppExit {
     app.add_plugins(plugins)
         .init_state::<AppState>()
         .add_plugins((loading::LoadingPlugin, tiles::TilesPlugin))
-        .add_systems(Startup, board::spawn_board);
+        .add_systems(Startup, board::spawn_camera);
     options.configure(&mut app);
     app.run()
 }

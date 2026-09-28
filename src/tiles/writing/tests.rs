@@ -65,68 +65,23 @@ fn scrollbar_metrics_are_bounded_even_before_layout() {
 
 #[test]
 fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
-    use bevy::app::{HierarchyPropagatePlugin, PropagateSet};
-    use bevy::camera::{
-        ComputedCameraValues, ManualTextureViewHandle, NormalizedRenderTarget, RenderTargetInfo,
-        Viewport,
-    };
+    use crate::test_support::input::location;
     use bevy::input::touch::TouchPhase;
-    use bevy::picking::pointer::{Location, PointerId};
-    use bevy::ui::{ui_layout_system, ui_surface::UiSurface, update::propagate_ui_target_cameras};
+    use bevy::picking::pointer::PointerId;
     for dpi in [1.0, 1.5, 2.0] {
         for ui_scale in [0.8, 1.0] {
-            let mut app = App::new();
-            app.add_plugins((
-                bevy::app::TaskPoolPlugin::default(),
-                HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(PostUpdate),
-                HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(PostUpdate),
-            ))
-            .insert_resource(UiScale(ui_scale))
-            .init_resource::<UiSurface>()
-            .init_resource::<bevy::text::FontCx>()
-            .add_message::<PointerInput>()
-            .insert_resource(GameAssets {
+            let mut app =
+                crate::test_support::ui::layout_app(Vec2::new(1600.0, 900.0), dpi, ui_scale);
+            app.insert_resource(GameAssets {
                 words: default(),
                 word_font: default(),
                 signature_font: None,
             })
             .add_systems(Startup, crate::tiles::spawn_board_root)
-            .add_systems(Update, (scroll_input_system, scrollbar_system).chain())
-            .add_systems(
-                PostUpdate,
-                (propagate_ui_target_cameras, ui_layout_system).chain(),
-            )
-            .configure_sets(
-                PostUpdate,
-                PropagateSet::<ComputedUiTargetCamera>::default()
-                    .after(propagate_ui_target_cameras)
-                    .before(ui_layout_system),
-            )
-            .configure_sets(
-                PostUpdate,
-                PropagateSet::<ComputedUiRenderTargetInfo>::default()
-                    .after(propagate_ui_target_cameras)
-                    .before(ui_layout_system),
-            );
+            .add_systems(PreUpdate, crate::tiles::presentation::fit_page_lead);
+            crate::tiles::register_interaction_systems(&mut app);
+            crate::tiles::register_tray_animation(&mut app);
             let physical_size = (Vec2::new(1600.0, 900.0) * dpi * ui_scale).as_uvec2();
-            app.world_mut().spawn((
-                Camera2d,
-                IsDefaultUiCamera,
-                Camera {
-                    computed: ComputedCameraValues {
-                        target_info: Some(RenderTargetInfo {
-                            physical_size,
-                            scale_factor: dpi,
-                        }),
-                        ..default()
-                    },
-                    viewport: Some(Viewport {
-                        physical_size,
-                        ..default()
-                    }),
-                    ..default()
-                },
-            ));
             app.update();
             app.update();
             let view = app
@@ -152,12 +107,54 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
             );
             let view_size = app.world().get::<ComputedNode>(view).unwrap().size / (dpi * ui_scale);
             assert!(
-                (view_size - Vec2::new(900.0, 645.0)).length() < 1.0,
+                (view_size - Vec2::new(900.0, 581.0)).length() < 1.0,
                 "{view_size:?}"
             );
             let start = app
                 .world()
                 .get::<UiGlobalTransform>(zone)
+                .unwrap()
+                .translation;
+            let zone_size = app.world().get::<ComputedNode>(zone).unwrap().size;
+            let first_line_center = start.y - zone_size.y * 0.5 + 20.0 * dpi * ui_scale;
+            assert!(
+                (first_line_center - physical_size.y as f32 * 0.5).abs() <= 1.0,
+                "first center={first_line_center}, screen={physical_size:?}, dpi={dpi}, ui={ui_scale}"
+            );
+            let title = app
+                .world_mut()
+                .query_filtered::<Entity, With<crate::tiles::title::PoemTitle>>()
+                .single(app.world())
+                .unwrap();
+            let title_start = app
+                .world()
+                .get::<UiGlobalTransform>(title)
+                .unwrap()
+                .translation;
+            assert!(title_start.y < first_line_center - 60.0 * dpi * ui_scale);
+            let bounds = geometry(
+                app.world().get::<ComputedNode>(zone).unwrap(),
+                app.world().get::<UiGlobalTransform>(zone).unwrap(),
+                Some((
+                    app.world().get::<ComputedNode>(view).unwrap(),
+                    app.world().get::<UiGlobalTransform>(view).unwrap(),
+                    app.world().get::<ScrollPosition>(view).unwrap(),
+                )),
+            );
+            assert!(
+                bounds
+                    .visible
+                    .contains(Vec2::new(start.x, first_line_center))
+            );
+            assert!(!bounds.visible.contains(title_start));
+            let menu = app
+                .world_mut()
+                .query_filtered::<Entity, With<crate::tiles::presentation::MenuSpace>>()
+                .single(app.world())
+                .unwrap();
+            let menu_start = app
+                .world()
+                .get::<UiGlobalTransform>(menu)
                 .unwrap()
                 .translation;
             let mut guides = app
@@ -175,10 +172,7 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
             let scroll_event = |app: &mut App, point: Vec2, y: f32, unit: MouseScrollUnit| {
                 app.world_mut().write_message(PointerInput::new(
                     PointerId::Mouse,
-                    Location {
-                        target: NormalizedRenderTarget::TextureView(ManualTextureViewHandle(5)),
-                        position: point * ui_scale,
-                    },
+                    location(point * ui_scale),
                     PointerAction::Scroll {
                         x: 0.0,
                         y,
@@ -204,6 +198,21 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
                 .unwrap()
                 .translation;
             assert!((start.y - moved.y - (LINE_PITCH * dpi * ui_scale).floor()).abs() < 1.0);
+            let title_moved = app
+                .world()
+                .get::<UiGlobalTransform>(title)
+                .unwrap()
+                .translation;
+            assert!(
+                (title_start.y - title_moved.y - (LINE_PITCH * dpi * ui_scale).floor()).abs() < 1.0
+            );
+            assert_eq!(
+                app.world()
+                    .get::<UiGlobalTransform>(menu)
+                    .unwrap()
+                    .translation,
+                menu_start
+            );
             scroll_event(
                 &mut app,
                 Vec2::new(500.0, 800.0),
@@ -234,6 +243,8 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
                 MouseScrollUnit::Line,
             );
             let max = max_scroll(app.world().get::<ComputedNode>(view).unwrap());
+            // The entire title lead and all 24 lines contribute to scroll range.
+            assert!((max - 1129.0).abs() < 1.0, "{max}");
             assert_eq!(app.world().get::<ScrollPosition>(view).unwrap().0.y, max);
             scroll_event(
                 &mut app,
@@ -257,10 +268,7 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
                 .unwrap();
             app.world_mut().trigger(Pointer::new(
                 PointerId::Mouse,
-                Location {
-                    target: NormalizedRenderTarget::TextureView(ManualTextureViewHandle(5)),
-                    position: Vec2::new(1220.0, 100.0) * ui_scale,
-                },
+                location(Vec2::new(1220.0, 100.0) * ui_scale),
                 Drag {
                     button: PointerButton::Primary,
                     distance: Vec2::new(0.0, 20.0),
@@ -281,10 +289,7 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
                 (track_transform.translation + Vec2::new(0.0, track_node.size.y * 0.5)) / dpi;
             app.world_mut().trigger(Pointer::new(
                 PointerId::Mouse,
-                Location {
-                    target: NormalizedRenderTarget::TextureView(ManualTextureViewHandle(5)),
-                    position: bottom,
-                },
+                location(bottom),
                 Press {
                     button: PointerButton::Primary,
                     hit: bevy::picking::backend::HitData::new(track, 0.0, None, None),
@@ -293,6 +298,35 @@ fn real_layout_keeps_tray_fixed_and_scrolls_only_the_paper() {
                 track,
             ));
             assert_eq!(app.world().get::<ScrollPosition>(view).unwrap().0.y, max);
+            // Resize a live board: the leading space follows the full screen,
+            // without resetting the reader's scroll position.
+            app.world_mut().get_mut::<ScrollPosition>(view).unwrap().0.y = LINE_PITCH;
+            let resized = (Vec2::new(1920.0, 1080.0) * dpi * ui_scale).as_uvec2();
+            {
+                let mut cameras = app
+                    .world_mut()
+                    .query_filtered::<&mut Camera, With<Camera2d>>();
+                let mut camera = cameras.single_mut(app.world_mut()).unwrap();
+                camera.viewport.as_mut().unwrap().physical_size = resized;
+                camera.computed.target_info.as_mut().unwrap().physical_size = resized;
+            }
+            app.update();
+            app.update();
+            assert_eq!(
+                app.world().get::<ScrollPosition>(view).unwrap().0.y,
+                LINE_PITCH
+            );
+            let node = app.world().get::<ComputedNode>(zone).unwrap();
+            let position = app
+                .world()
+                .get::<UiGlobalTransform>(zone)
+                .unwrap()
+                .translation;
+            let first_line = position.y - node.size.y * 0.5 + 20.0 * dpi * ui_scale;
+            assert!(
+                (first_line + (LINE_PITCH * dpi * ui_scale).floor() - resized.y as f32 * 0.5).abs()
+                    <= 1.0
+            );
         }
     }
 }

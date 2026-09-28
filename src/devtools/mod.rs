@@ -1,6 +1,7 @@
 //! Startup-only environment parsing and opt-in review systems.
 //! Gameplay consumes GameOptions; it never imports these diagnostic resources.
 mod capture;
+mod drag_fixture;
 mod fixture;
 
 use crate::config::GameOptions;
@@ -75,6 +76,20 @@ impl RunOptions {
     pub fn configure(self, app: &mut App) {
         app.insert_resource(self.game);
         if let Some(scene) = self.scene {
+            if let Some(phased) = scene.2 {
+                app.insert_resource(drag_fixture::PendingDrag(phased))
+                    .add_systems(
+                        Update,
+                        drag_fixture::apply_drag
+                            .after(fixture::apply_fixture_scene)
+                            .before(crate::tiles::TileInteraction)
+                            .run_if(in_state(AppState::Playing))
+                            .run_if(resource_exists::<drag_fixture::PendingDrag>)
+                            .run_if(|pending: Option<Res<fixture::PendingFixture>>| {
+                                pending.is_none()
+                            }),
+                    );
+            }
             app.insert_resource(scene)
                 .add_systems(
                     OnEnter(AppState::Playing),
