@@ -151,7 +151,7 @@ fn sync_title_chrome(
         "Give this poem a title..",
         "Give this poem a title...",
     ];
-    let frame = (time.elapsed().as_millis() / 450 % frames.len() as u128) as usize;
+    let frame = ((time.elapsed().as_millis() / 2) / 450 % frames.len() as u128) as usize;
     for (mut current, mut text) in &mut placeholder {
         if *current != visibility {
             *current = visibility;
