@@ -1,7 +1,7 @@
 use super::*;
+use crate::tiles::animation::tile_feel_system;
 use crate::tiles::drag::{
-    cancel_drag_system, on_tile_drag, tile_drag_end, tile_drag_start, tile_feel_system,
-    tile_follow_system,
+    cancel_drag_system, on_tile_drag, tile_drag_end, tile_drag_start, tile_follow_system,
 };
 use bevy::app::{HierarchyPropagatePlugin, PropagateSet};
 use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
@@ -26,6 +26,8 @@ impl TrayFixture {
         ))
         .init_resource::<Time>()
         .init_resource::<ButtonInput<KeyCode>>()
+        .add_message::<bevy::picking::pointer::PointerInput>()
+        .add_message::<bevy::window::WindowFocused>()
         .insert_resource(UiScale(ui_scale))
         .init_resource::<UiSurface>()
         .init_resource::<bevy::text::FontCx>()
@@ -97,26 +99,30 @@ impl TrayFixture {
         let tray = app.world_mut().spawn((BoardTray, tray_node)).id();
         let tiles = widths
             .iter()
-            .enumerate()
-            .map(|(index, &width)| {
+            .map(|&width| {
                 app.world_mut()
                     .spawn((
-                        WordTile {
-                            unique_word: index.to_string(),
+                        WordTile,
+                        LayoutConfig {
+                            use_rounding: false,
                         },
                         Node {
                             width: Val::Px(width),
                             height: Val::Px(40.0),
+                            border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
                         ChildOf(tray),
                     ))
                     // Stand-in for the text subtree: it must slide with the tile.
-                    .with_child(Node {
-                        width: Val::Px(20.0),
-                        height: Val::Px(20.0),
-                        ..default()
-                    })
+                    .with_child((
+                        LayoutConfig::default(),
+                        Node {
+                            width: Val::Px(20.0),
+                            height: Val::Px(20.0),
+                            ..default()
+                        },
+                    ))
                     .observe(tile_drag_start)
                     .observe(on_tile_drag)
                     .observe(tile_drag_end)
@@ -161,7 +167,7 @@ impl TrayFixture {
             .size;
         let origin = self.center(self.tray) - tray_size / (self.dpi * self.ui_scale) * 0.5;
         let mut surface = self.app.world_mut().resource_mut::<UiSurface>();
-        let (layout, _) = surface.get_layout(entity, true).unwrap();
+        let (layout, _) = surface.get_layout(entity, false).unwrap();
         origin
             + Vec2::new(
                 layout.location.x + layout.size.width * 0.5,
@@ -257,10 +263,50 @@ impl TrayFixture {
 }
 
 #[test]
+#[ignore = "opt-in CPU measurement, not a timing assertion"]
+fn performance_tray_with_real_layout_forty_tiles() {
+    use crate::performance::measure;
+    let widths: Vec<_> = (0..40)
+        .map(|index| 40.0 + (index % 5) as f32 * 20.0)
+        .collect();
+    let mut fixture = TrayFixture::new(&widths, 1.0, 1.0);
+    fixture
+        .app
+        .world_mut()
+        .get_mut::<Node>(fixture.tray)
+        .unwrap()
+        .width = Val::Px(1248.0);
+    for _ in 0..90 {
+        fixture.step();
+    }
+    measure("40 tray tiles / idle with UI layout", 100, || {
+        fixture.step()
+    });
+    let held = fixture.tiles[3];
+    fixture.grab(held);
+    let mut tick = 0;
+    measure("40 tray tiles / moving gap with UI layout", 100, || {
+        fixture.drag(
+            held,
+            Vec2::new(
+                120.0 + (tick % 30) as f32 * 40.0,
+                430.0 + ((tick / 30) % 3) as f32 * 48.0,
+            ),
+        );
+        tick += 1;
+    });
+}
+
+#[test]
 fn pickup_preserves_layout_and_slot_changes_stay_stable_at_all_scales() {
     for dpi in [1.0, 1.5, 2.0] {
-        for ui_scale in [1.0, 1.25] {
-            let mut f = TrayFixture::new(&[80.0, 140.0, 60.0, 110.0, 70.0], dpi, ui_scale);
+        for ui_scale in [0.8, 1.0, 1.25] {
+            let mut f = TrayFixture::new(&[82.3, 140.6, 66.7, 112.1, 72.9], dpi, ui_scale);
+            for &tile in &f.tiles {
+                let node = f.app.world().get::<ComputedNode>(tile).unwrap();
+                assert!(node.border.min_inset.min_element() > 0.0);
+                assert!(node.border.max_inset.min_element() > 0.0);
+            }
             let held = f.tiles[1];
             let initial: Vec<_> = f.tiles.iter().map(|&tile| f.center(tile)).collect();
             f.grab(held);

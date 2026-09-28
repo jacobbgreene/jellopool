@@ -1,26 +1,27 @@
-//! Stage-0 test-only fixture for the approved deterministic-board proposal.
+//! Deterministic, opt-in arrangements for visual regression checks.
 //!
 //! This module arranges a reproducible board for tests and screenshots. It
 //! is activated ONLY by environment variables and NEVER affects normal
 //! launches: when `JELLOPOOL_SCENE` is unset, none of these systems are
-//! registered (see main.rs) and the game behaves exactly as before.
+//! registered (see devtools/mod.rs).
 //!
 //! Activation:
-//!   - `JELLOPOOL_SCENE=dense|scattered|edge` — which scene to commit. Setting
-//!     it also implies `JELLOPOOL_SEED = FIXTURE_SEED` (see word_bank.rs) so
+//!   - `JELLOPOOL_SCENE=empty|poem|dense|scattered|edge|scrolled` — scene to commit. Setting
+//!     it also implies `JELLOPOOL_SEED = FIXTURE_SEED` unless overridden, so
 //!     the scene's words always exist in the tray.
 //!   - `JELLOPOOL_WINDOWED` / `JELLOPOOL_SCALE_FACTOR` — the matching window
-//!     override lives in main.rs.
+//!     override lives in devtools/mod.rs.
 //!
-//! Scenes are authored against the reference viewport of 1600x900 logical
-//! pixels: the writing zone is ~= 1248x693 logical px (78% width, flex-grow
-//! above the 23% tray), so with the 40px snap grid a tile of typical size
-//! (~50px tall, wider the longer the word) fits columns 0..~29, rows 0..~16.
+//! Scenes target the centered 900px paper, with an 804px writing width,
+//! 40px horizontal steps and 24 numbered lines at a 56px pitch.
 //! Every entry is planned through `crate::tiles::placement::plan`, so any
 //! authoring overlap is resolved by the same push cascade a real drop uses.
 
 use crate::prelude::*;
-use crate::tiles::placement::{GRID, TileRect, plan};
+use crate::tiles::placement::{GRID, LINE_PITCH, TileRect, plan};
+use crate::tiles::writing::WritingViewport;
+use bevy::app::AppExit;
+use bevy::text::TextLayoutInfo;
 
 /// Seed used for word selection whenever `JELLOPOOL_SCENE` is set (and
 /// `JELLOPOOL_SEED` is not). Every scene word below comes from the selection
@@ -34,14 +35,14 @@ const MAX_WAIT_FRAMES: u32 = 600;
 type SceneEntry = (&'static str, u32, u32);
 
 /// Tight multi-row block with several short/long adjacencies. Rows are
-/// pitched 2 cells apart (tiles are taller than one 40px row); "the" is
+/// pitched 2 cells apart to leave a row of breathing room; "the" is
 /// authored one cell into "collapse"'s tail on purpose, so every run
 /// exercises `plan`'s push cascade and ends with them flush-adjacent.
 const DENSE: [SceneEntry; 12] = [
     ("collapse", 0, 0),
     ("the", 2, 0),
-    ("shudder", 5, 0),
-    ("a", 8, 0),
+    ("shudder", 7, 0),
+    ("a", 10, 0),
     ("if", 0, 2),
     ("beneath", 2, 2),
     ("moss", 5, 2),
@@ -52,55 +53,79 @@ const DENSE: [SceneEntry; 12] = [
     ("world", 5, 4),
 ];
 
-/// Spread across the zone. "but" is authored as "some"'s grid neighbor;
-/// since tiles are taller than one row, `plan` settles them flush-adjacent.
+/// Spread across numbered lines. The last word sits below the initial viewport
+/// so a scroll reveals another part of the composition.
 const SCATTERED: [SceneEntry; 7] = [
     ("origin", 2, 1),
-    ("glow", 14, 0),
-    ("pit", 24, 3),
-    ("some", 10, 5),
-    ("but", 10, 6),
-    ("under", 6, 9),
-    ("closed", 20, 12),
+    ("glow", 12, 0),
+    ("pit", 17, 3),
+    ("some", 8, 5),
+    ("but", 8, 6),
+    ("under", 4, 9),
+    ("closed", 14, 12),
 ];
 
-/// Zone extremes: column 0, the rightmost feasible column for a short tile
-/// (col 29: 1160 + ~56px <= 1248), row 0, and the bottom row adjacent to
-/// the zone/tray seam (row 16: 640 + ~50px <= 693).
+/// A deliberately odd little arrangement for judging type and visual hierarchy.
+const POEM: [SceneEntry; 6] = [
+    ("the", 8, 5),
+    ("moss", 10, 5),
+    ("had", 8, 7),
+    ("a", 10, 7),
+    ("weapon", 12, 7),
+    ("perhaps", 8, 9),
+];
+
+/// Visible page extremes at the reference viewport.
 const EDGE: [SceneEntry; 6] = [
     ("within", 0, 5),
-    ("an", 29, 8),
+    ("an", 18, 8),
     ("upon", 12, 0),
-    ("cliff", 15, 16),
-    ("dead", 0, 16),
-    ("lush", 24, 0),
+    ("cliff", 15, 10),
+    ("dead", 0, 10),
+    ("lush", 17, 0),
+];
+
+const SCROLLED: [SceneEntry; 6] = [
+    ("the", 0, 14),
+    ("moss", 2, 14),
+    ("had", 0, 16),
+    ("a", 2, 16),
+    ("weapon", 4, 16),
+    ("perhaps", 0, 23),
 ];
 
 /// The scene chosen at startup, made a resource so the OnEnter system can
 /// arm the pending placement.
 #[derive(Resource, Clone, Copy)]
-pub struct FixtureScene(&'static [SceneEntry]);
+pub struct FixtureScene(&'static [SceneEntry], f32);
 
 /// Present while a fixture scene still needs to be committed. Removed once
 /// the scene has been applied (or given up on).
 #[derive(Resource)]
 pub(crate) struct PendingFixture {
     scene: &'static [SceneEntry],
+    scroll: f32,
 }
 
-/// Read `JELLOPOOL_SCENE`; `None` (the default) leaves the game untouched.
-pub fn scene_from_env() -> Option<FixtureScene> {
-    let value = std::env::var("JELLOPOOL_SCENE").ok()?;
-    let scene: &'static [SceneEntry] = match value.as_str() {
-        "dense" => Some(&DENSE[..]),
-        "scattered" => Some(&SCATTERED[..]),
-        "edge" => Some(&EDGE[..]),
-        other => {
-            warn!("JELLOPOOL_SCENE={other:?} is not dense|scattered|edge; ignoring fixture");
-            None
-        }
-    }?;
-    Some(FixtureScene(scene))
+/// Validate a requested scene; unknown names must not silently run a random board.
+pub fn parse_scene(value: &str) -> Result<FixtureScene, String> {
+    let scene: &'static [SceneEntry] = match value {
+        "empty" => &[],
+        "poem" => &POEM,
+        "dense" => &DENSE,
+        "scattered" => &SCATTERED,
+        "edge" => &EDGE,
+        "scrolled" => &SCROLLED,
+        other => return Err(format!("Unknown JELLOPOOL_SCENE={other:?}")),
+    };
+    Ok(FixtureScene(
+        scene,
+        if value == "scrolled" {
+            24.0 * LINE_PITCH
+        } else {
+            0.0
+        },
+    ))
 }
 
 /// Chained after `spawn_all_tiles` in `OnEnter(AppState::Playing)`: arms the
@@ -108,7 +133,10 @@ pub fn scene_from_env() -> Option<FixtureScene> {
 /// and UI layout only runs in PostUpdate, so real sizes do not exist yet —
 /// placement happens in `apply_fixture_scene` on the first laid-out frame.
 pub fn arm_fixture_scene(mut commands: Commands, scene: Res<FixtureScene>) {
-    commands.insert_resource(PendingFixture { scene: scene.0 });
+    commands.insert_resource(PendingFixture {
+        scene: scene.0,
+        scroll: scene.1,
+    });
 }
 
 /// Commits the armed scene, once, on the first Update where the zone and
@@ -116,25 +144,34 @@ pub fn arm_fixture_scene(mut commands: Commands, scene: Res<FixtureScene>) {
 /// Each entry is committed exactly like a valid `tile_drag_end` drop —
 /// `ChildOf(zone)`, `PlacedTile(cell)`, absolute `Node` at left/top = cell —
 /// minus SnapAnim/TileFeel, since an at-rest fixture needs no animation.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_fixture_scene(
     mut commands: Commands,
     pending: Res<PendingFixture>,
     zone: Single<(Entity, &ComputedNode), With<WritingZone>>,
     mut tiles: Query<(Entity, &Name, &ComputedNode, &mut Node), With<WordTile>>,
+    text: Query<&TextLayoutInfo, With<Text>>,
+    mut viewport: Query<(&ComputedNode, &mut ScrollPosition), With<WritingViewport>>,
+    mut exit: MessageWriter<AppExit>,
     mut frames_waited: Local<u32>,
 ) {
     let (zone_entity, zone_node) = zone.into_inner();
     // Zone bounds in logical units, exactly as tile_drag_end computes them.
     let bounds = zone_node.size * zone_node.inverse_scale_factor;
 
-    let laid_out = bounds.cmpgt(Vec2::ZERO).all()
+    let laid_out = !text.is_empty()
+        && text
+            .iter()
+            .all(|layout| !layout.glyphs.is_empty() && layout.size.cmpgt(Vec2::ZERO).all())
+        && bounds.cmpgt(Vec2::ZERO).all()
         && tiles
             .iter()
             .all(|(_, _, computed, _)| computed.size.cmpgt(Vec2::ZERO).all());
     if !laid_out {
         *frames_waited += 1;
         if *frames_waited > MAX_WAIT_FRAMES {
-            warn!("fixture: UI layout never produced tile sizes; abandoning scene");
+            error!("fixture: text/layout did not become ready; failing scene");
+            exit.write(AppExit::error());
             commands.remove_resource::<PendingFixture>();
         }
         return;
@@ -144,17 +181,16 @@ pub fn apply_fixture_scene(
     // exactly like the drag code's already-placed list.
     let mut committed: Vec<TileRect> = Vec::new();
     for &(word, col, row) in pending.scene {
-        let cell = Vec2::new(col as f32 * GRID, row as f32 * GRID);
-        let found = tiles
-            .iter()
-            .find_map(|(entity, name, computed, _)| {
-                (name.as_str() == word
-                    && !committed.iter().any(|tile| tile.entity == entity))
-                    .then_some((entity, computed.size * computed.inverse_scale_factor))
-            });
+        let cell = Vec2::new(col as f32 * GRID, row as f32 * LINE_PITCH);
+        let found = tiles.iter().find_map(|(entity, name, computed, _)| {
+            (name.as_str() == word && !committed.iter().any(|tile| tile.entity == entity))
+                .then_some((entity, computed.size * computed.inverse_scale_factor))
+        });
         let Some((entity, size)) = found else {
-            warn!("fixture: no uncommitted tile named {word:?}; skipping");
-            continue;
+            error!("fixture: no uncommitted tile named {word:?}");
+            exit.write(AppExit::error());
+            commands.remove_resource::<PendingFixture>();
+            return;
         };
         let held = TileRect {
             entity,
@@ -162,8 +198,10 @@ pub fn apply_fixture_scene(
             size,
         };
         let Some(moved) = plan(held, &committed, bounds) else {
-            warn!("fixture: no feasible plan for {word:?} at cell {cell:?}; skipping");
-            continue;
+            error!("fixture: no feasible plan for {word:?} at cell {cell:?}");
+            exit.write(AppExit::error());
+            commands.remove_resource::<PendingFixture>();
+            return;
         };
         // Mirror tile_drag_end: tiles the plan pushed adopt their new
         // logical positions. With no preview animation, set them directly.
@@ -196,6 +234,11 @@ pub fn apply_fixture_scene(
             size,
         });
     }
+    if let Ok((node, mut scroll)) = viewport.single_mut() {
+        scroll.0.y = pending
+            .scroll
+            .min((node.content_size.y - node.size.y).max(0.0) * node.inverse_scale_factor);
+    }
     commands.remove_resource::<PendingFixture>();
 }
 
@@ -218,9 +261,11 @@ mod tests {
     fn scene_words_exist_in_fixture_seed_selection() {
         let selection = fixture_selection();
         for (scene, entries) in [
+            ("poem", &POEM[..]),
             ("dense", &DENSE[..]),
             ("scattered", &SCATTERED[..]),
             ("edge", &EDGE[..]),
+            ("scrolled", &SCROLLED[..]),
         ] {
             for &(word, _, _) in entries {
                 assert!(
@@ -235,7 +280,13 @@ mod tests {
     /// one name; scenes must use distinct words.
     #[test]
     fn scene_words_are_distinct_within_each_scene() {
-        for entries in [&DENSE[..], &SCATTERED[..], &EDGE[..]] {
+        for entries in [
+            &POEM[..],
+            &DENSE[..],
+            &SCATTERED[..],
+            &EDGE[..],
+            &SCROLLED[..],
+        ] {
             for (index, (word, _, _)) in entries.iter().enumerate() {
                 assert!(!entries[..index].iter().any(|(other, _, _)| other == word));
             }

@@ -1,5 +1,5 @@
 /target
-/Cargo.lock
+/docs/
 *.pdb
 .env
 .idea/

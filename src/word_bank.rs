@@ -1,8 +1,9 @@
-use crate::fixture::FIXTURE_SEED;
 use crate::prelude::*;
 use rand::rngs::SmallRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, SeedableRng};
+
+pub(crate) const WORD_COUNT: usize = 40;
 
 #[derive(Asset, TypePath, serde::Deserialize)]
 pub struct WordBank {
@@ -16,20 +17,12 @@ pub struct WordBank {
     pub articles: Vec<String>,
 }
 
-#[derive(Resource)]
-pub(crate) struct WordBankHandle(pub(crate) Handle<WordBank>);
-
-pub fn load_word_bank(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let asset: Handle<WordBank> = asset_server.load("word_bank.ron");
-    commands.insert_resource(WordBankHandle(asset));
-}
-
 /// Word selection driven by a caller-supplied RNG, factored out so tests and
-/// the seeded fixture path (see fixture.rs) can drive it deterministically.
+/// seeded startup options can drive it deterministically.
 pub(crate) fn select_words_with_rng(word_bank: &WordBank, rng: &mut impl Rng) -> Vec<String> {
-    let mut selected_words: Vec<String> = Vec::new();
+    let mut selected_words: Vec<String> = Vec::with_capacity(WORD_COUNT);
 
-    //TODO: Get a more consistent/optimal ration for words
+    //TODO: Get a more consistent/optimal ratio for words
     // There should be a slider or something for users to pick how many words they want
     let plan = [
         (&word_bank.nouns, 6),
@@ -51,31 +44,10 @@ pub(crate) fn select_words_with_rng(word_bank: &WordBank, rng: &mut impl Rng) ->
     selected_words
 }
 
-pub(crate) fn select_words(word_bank: &WordBank) -> Vec<String> {
-    // JELLOPOOL_SEED (u64) makes the selection deterministic. JELLOPOOL_SCENE
-    // being set implies the fixture seed — fixture scene words must exist in
-    // the selection — unless JELLOPOOL_SEED overrides it explicitly.
-    let seed = std::env::var("JELLOPOOL_SEED")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .or_else(|| {
-            std::env::var("JELLOPOOL_SCENE")
-                .is_ok()
-                .then_some(FIXTURE_SEED)
-        });
+pub(crate) fn select_words(word_bank: &WordBank, seed: Option<u64>) -> Vec<String> {
     match seed {
         Some(seed) => select_words_with_rng(word_bank, &mut SmallRng::seed_from_u64(seed)),
         None => select_words_with_rng(word_bank, &mut rand::rng()),
-    }
-}
-
-pub fn switch_to_playing_state(
-    handle: Res<WordBankHandle>,
-    banks: Res<Assets<WordBank>>,
-    mut next_state: ResMut<NextState<AppState>>,
-) {
-    if banks.get(&handle.0).is_some() {
-        next_state.set(AppState::Playing);
     }
 }
 
@@ -85,7 +57,9 @@ mod tests {
 
     fn test_word_bank() -> WordBank {
         let words = |prefix: &str, count: usize| -> Vec<String> {
-            (0..count).map(|index| format!("{prefix}-{index}")).collect()
+            (0..count)
+                .map(|index| format!("{prefix}-{index}"))
+                .collect()
         };
         WordBank {
             nouns: words("noun", 12),

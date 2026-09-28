@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.19"
+bevy = { version = "0.19", default-features = false, features = [
+    "std", "multi_threaded", "bevy_winit", "ui_bevy_render", "ui_picking",
+    "png", "x11", "wayland", "touch", "sysinfo_plugin",
+] }
 bevy_common_assets = { version = "0.17.0", features = ["ron"] }
-hashbrown = "0.17.1"
 rand = "0.10.1"
-random_word = { version = "0.5.2", features = ["en"] }
 ron = "0.12.1"
 serde = { version = "1.0.228", features = ["derive"] }
 

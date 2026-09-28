@@ -36,10 +36,8 @@
                 xset
               ]
               ++ lib.optionals (lib.strings.hasInfix "linux" system) [
-                alsa-lib
                 vulkan-loader
                 vulkan-tools
-                libudev-zero
                 libx11
                 libxcursor
                 libxi
