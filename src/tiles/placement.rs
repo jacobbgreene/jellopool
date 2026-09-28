@@ -3,8 +3,7 @@ use bevy::prelude::*;
 
 /// Horizontal spacing unit for authored fixtures, not a gameplay snap.
 pub(crate) const GRID: f32 = 40.0;
-pub(crate) const LINE_PITCH: f32 = 56.0;
-pub(crate) const LINE_COUNT: usize = 24;
+pub(crate) use crate::poems::{LINE_COUNT, LINE_PITCH};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TileRect {

@@ -93,7 +93,7 @@ fn capture_frame(
     pending_drag: Option<Res<super::drag_fixture::PendingDrag>>,
     tiles: Query<(&Name, &ComputedNode, &UiGlobalTransform, &ChildOf), With<WordTile>>,
     regions: Query<(&ComputedNode, &UiGlobalTransform)>,
-    text: Query<&TextLayoutInfo, With<Text>>,
+    text: Query<(&Text, &TextLayoutInfo)>,
     mut exit: MessageWriter<AppExit>,
     mut frames: Local<u32>,
 ) {
@@ -107,9 +107,9 @@ fn capture_frame(
         || pending_drag.is_some()
         || tiles.iter().count() != crate::word_bank::WORD_COUNT
         || text.is_empty()
-        || text
-            .iter()
-            .any(|text| text.glyphs.is_empty() || text.size.min_element() <= 0.0)
+        || text.iter().any(|(value, text)| {
+            !value.is_empty() && (text.glyphs.is_empty() || text.size.min_element() <= 0.0)
+        })
         || tiles
             .iter()
             .any(|(_, node, _, _)| node.size.min_element() <= 0.0)

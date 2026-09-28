@@ -5,13 +5,13 @@ use crate::prelude::*;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::picking::pointer::{PointerAction, PointerInput};
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct WritingViewport;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(super) struct ScrollTrack;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(super) struct ScrollThumb;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(super) struct LineGuide;
 
 pub(super) type Viewports<'w, 's> = Query<

@@ -28,6 +28,7 @@ fn editor_app() -> (App, Entity, Entity) {
             .with_children(|root| spawn_title(root, default()));
     })
     .add_systems(PostUpdate, apply_text_edits.in_set(EditableTextSystems));
+    crate::test_support::ui::enable_scenes(&mut app);
     let window = app
         .world_mut()
         .spawn((Window::default(), PrimaryWindow))

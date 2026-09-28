@@ -1,8 +1,10 @@
 use super::*;
+use crate::config::GameOptions;
 use crate::word_bank::WordBank;
 
 fn spawn_app(bank: Option<WordBank>) -> App {
     let mut app = App::new();
+    crate::test_support::ui::enable_scenes(&mut app);
     app.init_resource::<Assets<WordBank>>()
         .init_resource::<GameOptions>()
         .add_message::<AppExit>()

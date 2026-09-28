@@ -3,7 +3,10 @@ mod animation;
 mod drag;
 pub(crate) mod placement;
 mod presentation;
+pub(crate) mod scenes;
+mod session;
 pub(crate) mod title;
+mod toolbar;
 mod tray;
 pub(crate) mod writing;
 
@@ -21,13 +24,13 @@ pub use presentation::{spawn_all_tiles, spawn_board_root};
 use tray::{tray_gap_system, tray_slide_system};
 use writing::{scroll_input_system, scrollbar_system};
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct BoardTray;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct WritingZone;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct DragLayer;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct WordTile;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,6 +63,7 @@ impl Plugin for TilesPlugin {
             );
         register_interaction_systems(app);
         register_tray_animation(app);
+        session::register(app);
     }
 }
 

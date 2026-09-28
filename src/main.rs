@@ -4,6 +4,7 @@ mod board;
 mod config;
 mod devtools;
 mod loading;
+mod poems;
 mod states;
 #[cfg(test)]
 mod test_support;
@@ -37,7 +38,11 @@ fn main() -> AppExit {
     let mut app = App::new();
     app.add_plugins(plugins)
         .init_state::<AppState>()
-        .add_plugins((loading::LoadingPlugin, tiles::TilesPlugin))
+        .add_plugins((
+            loading::LoadingPlugin,
+            poems::PoemsPlugin,
+            tiles::TilesPlugin,
+        ))
         .add_systems(Startup, board::spawn_camera);
     options.configure(&mut app);
     app.run()

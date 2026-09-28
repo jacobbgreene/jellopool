@@ -14,6 +14,7 @@ pub struct RunOptions {
     capture: Option<capture::Capture>,
     windowed: bool,
     scale: f32,
+    saves: crate::poems::SaveLocation,
 }
 
 impl RunOptions {
@@ -40,11 +41,17 @@ impl RunOptions {
             }
             game.show_signature = std::env::var_os("JELLOPOOL_CAPTURE_NO_SIGNATURE").is_none();
         }
+        let saves = if scene.is_some() || capture.is_some() || seed.is_some() {
+            crate::poems::SaveLocation::Memory
+        } else {
+            save_location()
+        };
         Ok(Self {
             game,
             scene,
             capture,
             scale,
+            saves,
             windowed: std::env::var_os("JELLOPOOL_WINDOWED").is_some(),
         })
     }
@@ -74,7 +81,7 @@ impl RunOptions {
     }
 
     pub fn configure(self, app: &mut App) {
-        app.insert_resource(self.game);
+        app.insert_resource(self.game).insert_resource(self.saves);
         if let Some(scene) = self.scene {
             if let Some(phased) = scene.2 {
                 app.insert_resource(drag_fixture::PendingDrag(phased))
@@ -108,6 +115,37 @@ impl RunOptions {
         if let Some(capture) = self.capture {
             capture::configure(app, capture);
         }
+    }
+}
+
+fn save_location() -> crate::poems::SaveLocation {
+    use crate::poems::SaveLocation;
+    use std::path::PathBuf;
+    let value = |key| {
+        std::env::var_os(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let directory = value("JELLOPOOL_DATA_DIR").or_else(|| {
+        #[cfg(target_os = "windows")]
+        {
+            value("LOCALAPPDATA").map(|path| path.join("jellopool"))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            value("HOME").map(|path| path.join("Library/Application Support/jellopool"))
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            value("XDG_DATA_HOME")
+                .filter(|path| path.is_absolute())
+                .or_else(|| value("HOME").map(|path| path.join(".local/share")))
+                .map(|path| path.join("jellopool"))
+        }
+    });
+    match directory {
+        Some(path) => SaveLocation::Directory(path),
+        None => SaveLocation::Unavailable("Cannot locate your data directory. Set JELLOPOOL_DATA_DIR to enable saving; this session is temporary.".into()),
     }
 }
 

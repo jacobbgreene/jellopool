@@ -1,5 +1,5 @@
 //! Two intentionally distinct harnesses: supplied geometry or Bevy's real layout.
-//! Neither starts a window, renderer, asset loader, or real-time clock.
+//! Neither starts a window, renderer, or real-time clock.
 use crate::prelude::*;
 use bevy::app::{HierarchyPropagatePlugin, PropagateSet};
 use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
@@ -31,10 +31,12 @@ pub(crate) fn synthetic_app(ui_scale: f32) -> App {
 /// Feature fixtures add their own systems and entities before the first update.
 pub(crate) fn layout_app(size: Vec2, dpi: f32, ui_scale: f32) -> App {
     let mut app = headless_app(ui_scale);
-    app.add_plugins((
-        bevy::app::TaskPoolPlugin::default(),
-        HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(PostUpdate),
-    ))
+    enable_scenes(&mut app);
+    app.add_plugins(
+        (HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(
+            PostUpdate,
+        ),),
+    )
     .init_resource::<UiSurface>()
     .init_resource::<bevy::text::FontCx>()
     .add_systems(PostUpdate, propagate_ui_target_cameras)
@@ -66,6 +68,15 @@ pub(crate) fn layout_app(size: Vec2, dpi: f32, ui_scale: f32) -> App {
         },
     );
     app
+}
+
+/// Scene resolution requires Bevy's asset registry, even with preloaded handles.
+/// No files are loaded here; feature fixtures supply their assets explicitly.
+pub(crate) fn enable_scenes(app: &mut App) {
+    if !app.is_plugin_added::<bevy::app::TaskPoolPlugin>() {
+        app.add_plugins(bevy::app::TaskPoolPlugin::default());
+    }
+    app.add_plugins((AssetPlugin::default(), bevy::scene::ScenePlugin));
 }
 
 pub(crate) fn spawn_camera(

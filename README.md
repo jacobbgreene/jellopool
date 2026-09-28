@@ -44,16 +44,18 @@ moves just clear of them and pushes only the right-side chain. The intended word
 order never changes to squeeze in a drop; if that insertion cannot fit, the held
 tile returns to the tray.
 
-The top strip is reserved for future menu controls. Line 1 starts at the screen's
+The top strip has **New draft**, **Previous draft**, and **Next draft** controls,
+the current draft's title/number, and save status. Line 1 starts at the screen's
 vertical center; the whitespace and title scroll away with the page. Click the
 title field (or press Tab) to name the poem. It supports selection, copy/paste,
 and Unicode input, up to 120 characters on one line. Enter, Escape, or clicking
-outside finishes editing. Titles, like the current tile arrangement, are
-session-only; saving is not implemented yet.
+outside finishes editing. Controls also support Tab and Enter/Space.
 
-A future save format needs the title, selected words with stable tile identities,
-placed positions, and tray membership/order. A seed alone is not enough to restore
-a session across word-bank changes; normal play does not retain a selection seed.
+Each draft keeps its title, actual word selection, placed tiles, and tray order.
+New draft starts with a fresh selection; switching does not reshuffle existing
+drafts. Changes autosave after a short pause, and the last active draft reopens on
+launch. Switching cancels an unfinished drag and its preview pushes. Only committed
+edits are saved. There is no delete button or submitted-poem collection yet.
 
 Escape cancels the entire drag, including its pushes. Pointer cancellation and
 focus loss likewise restore the held tile and all neighbors to their positions
@@ -61,6 +63,35 @@ before the gesture.
 
 `Cargo.lock` is intentionally included: use `--locked` for repeatable dependency
 resolution. Updating dependencies is a separate, deliberate operation.
+
+## Local drafts and architecture
+
+On Linux, drafts are stored in `$XDG_DATA_HOME/jellopool/drafts.ron`, or
+`$HOME/.local/share/jellopool/drafts.ron` when XDG_DATA_HOME is unset. macOS uses
+`~/Library/Application Support/jellopool`; Windows uses `%LOCALAPPDATA%/jellopool`.
+Set `JELLOPOOL_DATA_DIR` to choose another directory. Saves are local, not cloud
+backups. The current library allows up to 256 drafts.
+
+Writes are debounced and run off the interaction thread, with a final flush on
+normal exit. A force-kill or power loss can still lose edits since the last save.
+Atomic replacement preserves a `drafts.ron.bak` previous-save backup. If recovery
+uses that backup, a warning is shown and damaged primary bytes are archived before
+the next save. Unsupported save versions, unreadable saves, or another running
+instance disable saving for that session; the warning remains visible and existing
+files are not overwritten. In that case, resolve the warning and relaunch before
+doing work you need to keep. Ordinary write failures retain edits in memory and
+retry automatically. Copy the entire data directory for a manual backup.
+
+`JELLOPOOL_SCENE`, `JELLOPOOL_CAPTURE`, and `JELLOPOOL_SEED` runs are deliberately
+temporary: they neither load nor save personal drafts, even with a data-directory
+override. This keeps diagnostics reproducible and protects normal work.
+
+`src/poems/` owns durable documents and storage. `src/tiles/scenes.rs` contains
+actual, composable Bevy scene blueprints; interaction behavior remains in systems,
+with `src/tiles/session.rs` adapting the active document to the workspace.
+See [ROADMAP.md](ROADMAP.md) for the architecture and the **documented-only**
+exploration/story direction. No adventure-space assets or gameplay are required
+for this milestone.
 
 ## Checks and diagnostics
 
@@ -88,6 +119,10 @@ suites split by behavior, with fixtures in a dedicated `harness.rs`:
   the widest valid category selections.
 - `src/tiles/placement/tests/`: pure geometry checks and seeded randomized cases;
   CPU measurements live in their own `performance.rs`.
+- `src/poems/tests/`: document invariants and isolated on-disk save/recovery tests.
+  `src/poems/session/tests.rs` covers autosave timing, exit, and loading failures.
+- `src/tiles/session/tests/`: scene composition and draft-switching integration,
+  sharing a workspace harness.
 
 Drag, tray, and writing behavior harnesses register the same interaction chain
 as the game. Synthetic drag tests supply measured geometry and deliberately omit

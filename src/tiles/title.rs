@@ -1,6 +1,6 @@
 //! One real text editor, with page-specific styling and focus lifecycle.
 //! Bevy owns selection, Unicode, clipboard, IME and horizontal text scrolling.
-use super::presentation::{INK, RULE, SIGNATURE};
+use super::presentation::{INK, PAGE_LEFT, PAGE_RIGHT, RULE, SIGNATURE};
 use crate::prelude::*;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{
@@ -10,9 +10,9 @@ use bevy::input_focus::{
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, LineHeight};
 use bevy::window::WindowFocused;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct PoemTitle;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct TitlePlaceholder;
 
 pub(super) struct TitlePlugin;
@@ -32,85 +32,52 @@ impl Plugin for TitlePlugin {
     }
 }
 
-pub(super) fn spawn_title(parent: &mut ChildSpawnerCommands, font: Handle<Font>) {
-    let title_font = TextFont {
-        font: FontSource::Handle(font.clone()),
-        font_size: FontSize::Px(32.0),
-        ..default()
+pub(super) fn title_scene(font: Handle<Font>, title: String) -> impl Scene {
+    use super::scenes::text_style;
+    use bevy::scene::template_value;
+    let editor = EditableText {
+        max_characters: Some(crate::poems::TITLE_LIMIT),
+        cursor_width: 0.045,
+        ..EditableText::new(title)
     };
+    bsn! {
+        Name("poem_title_block")
+        TabGroup::new(0)
+        Node {
+            position_type: PositionType::Absolute, left: px(PAGE_LEFT), right: px(PAGE_RIGHT), bottom: px(88),
+            flex_direction: FlexDirection::Column, row_gap: px(8),
+        }
+        Children [
+            (
+                Text("POEM TITLE") text_style(font.clone(), 11.0, Color::from(SIGNATURE))
+                template_value(LineHeight::Px(16.0)) Pickable::IGNORE
+            ),
+            (
+                Name("poem_title") PoemTitle TabIndex(0)
+                template_value(editor)
+                // Also filter pasted and IME text, not just the Enter key.
+                template_value(EditableTextFilter::new(|c| !c.is_control() && c != '\u{2028}' && c != '\u{2029}'))
+                text_style(font.clone(), 32.0, Color::from(INK))
+                template_value(LineHeight::Px(44.0)) TextLayout::no_wrap()
+                BorderColor::from(Color::from(RULE))
+                LayoutConfig { use_rounding: false }
+                Node { width: percent(100), height: px(50), border: UiRect::bottom(px(1)), overflow: Overflow::clip() }
+                Children [(
+                    Name("poem_title_placeholder") TitlePlaceholder Text("Give this poem a title")
+                    text_style(font, 32.0, Color::srgba(0.600, 0.616, 0.584, 1.0))
+                    template_value(LineHeight::Px(44.0)) TextLayout::no_wrap() Pickable::IGNORE
+                    Node { position_type: PositionType::Absolute, left: px(0), top: px(0) }
+                )]
+            ),
+        ]
+    }
+}
+
+#[cfg(test)]
+fn spawn_title(parent: &mut ChildSpawnerCommands, font: Handle<Font>) {
     parent
-        .spawn((
-            Name::new("poem_title_block"),
-            TabGroup::new(0),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(64.0),
-                right: Val::Px(32.0),
-                bottom: Val::Px(88.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                ..default()
-            },
-        ))
-        .with_children(|block| {
-            block.spawn((
-                Text::new("POEM TITLE"),
-                TextFont {
-                    font: FontSource::Handle(font),
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(Color::from(SIGNATURE)),
-                LineHeight::Px(16.0),
-                Pickable::IGNORE,
-            ));
-            block
-                .spawn((
-                    Name::new("poem_title"),
-                    PoemTitle,
-                    TabIndex(0),
-                    EditableText {
-                        max_characters: Some(120),
-                        cursor_width: 0.045,
-                        ..default()
-                    },
-                    // `allow_newlines` disables Enter, but pasted/IME text also needs filtering.
-                    EditableTextFilter::new(|c| {
-                        !c.is_control() && c != '\u{2028}' && c != '\u{2029}'
-                    }),
-                    title_font.clone(),
-                    TextColor(Color::from(INK)),
-                    LineHeight::Px(44.0),
-                    TextLayout::no_wrap(),
-                    BorderColor::from(Color::from(RULE)),
-                    LayoutConfig {
-                        use_rounding: false,
-                    },
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(50.0),
-                        border: UiRect::bottom(Val::Px(1.0)),
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                ))
-                .with_child((
-                    Name::new("poem_title_placeholder"),
-                    TitlePlaceholder,
-                    Text::new("Give this poem a title"),
-                    title_font,
-                    TextColor(Color::srgba(0.600, 0.616, 0.584, 1.0)),
-                    LineHeight::Px(44.0),
-                    TextLayout::no_wrap(),
-                    Pickable::IGNORE,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        top: Val::Px(0.0),
-                        ..default()
-                    },
-                ));
-        });
+        .spawn_empty()
+        .apply_scene(title_scene(font, String::new()));
 }
 
 fn finish_editing(

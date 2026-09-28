@@ -151,7 +151,7 @@ pub fn apply_fixture_scene(
     pending: Res<PendingFixture>,
     zone: Single<(Entity, &ComputedNode), With<WritingZone>>,
     mut tiles: Query<(Entity, &Name, &ComputedNode, &mut Node), With<WordTile>>,
-    text: Query<&TextLayoutInfo, With<Text>>,
+    text: Query<(&Text, &TextLayoutInfo)>,
     mut viewport: Query<(&ComputedNode, &mut ScrollPosition), With<WritingViewport>>,
     mut title: Query<&mut bevy::text::EditableText, With<crate::tiles::title::PoemTitle>>,
     mut exit: MessageWriter<AppExit>,
@@ -162,9 +162,9 @@ pub fn apply_fixture_scene(
     let bounds = zone_node.size * zone_node.inverse_scale_factor;
 
     let laid_out = !text.is_empty()
-        && text
-            .iter()
-            .all(|layout| !layout.glyphs.is_empty() && layout.size.cmpgt(Vec2::ZERO).all())
+        && text.iter().all(|(value, layout)| {
+            value.is_empty() || (!layout.glyphs.is_empty() && layout.size.cmpgt(Vec2::ZERO).all())
+        })
         && bounds.cmpgt(Vec2::ZERO).all()
         && tiles
             .iter()
