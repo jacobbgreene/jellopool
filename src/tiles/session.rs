@@ -5,6 +5,7 @@ use super::{
     drag::{CancelDrag, DragFollow, PlacementPreview},
     scenes::WorkspaceRoot,
     title::PoemTitle,
+    tray::LastTraySlot,
 };
 pub(super) use crate::poems::DraftSession;
 use crate::{
@@ -41,9 +42,20 @@ struct DraftWorkspace;
 
 #[derive(Default)]
 struct CaptureBuffer {
-    positions: HashMap<TileId, Option<PaperPosition>>,
+    positions: HashMap<TileId, (Option<PaperPosition>, Option<usize>)>,
     tray: Vec<TileId>,
 }
+
+type CaptureTiles<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static DocumentTile,
+        Option<&'static PlacedTile>,
+        Option<&'static LastTraySlot>,
+    ),
+    With<WordTile>,
+>;
 
 pub(super) fn register(app: &mut App) {
     app.configure_sets(
@@ -134,7 +146,7 @@ fn capture_document(
     mut session: ResMut<DraftSession>,
     time: Res<Time>,
     titles: Query<&EditableText, With<PoemTitle>>,
-    tiles: Query<(&DocumentTile, Option<&PlacedTile>), With<WordTile>>,
+    tiles: CaptureTiles,
     trays: Query<&Children, With<BoardTray>>,
     dragged: Query<(), With<DragFollow>>,
     mut problem: ResMut<CaptureError>,
@@ -158,7 +170,7 @@ fn capture_document(
     positions.clear();
     tray.clear();
     if dragged.is_empty() {
-        for (id, placement) in &tiles {
+        for (id, placement, last_slot) in &tiles {
             if let Some(placement) = placement {
                 let line = placement.0.y / LINE_PITCH;
                 if !placement.0.is_finite()
@@ -174,7 +186,7 @@ fn capture_document(
                 line: (pos.0.y / LINE_PITCH).round() as u16,
                 x: pos.0.x,
             });
-            positions.insert(id.0, pos);
+            positions.insert(id.0, (pos, last_slot.map(|slot| slot.0)));
         }
         let Ok(children) = trays.single() else {
             problem.set_if_neq(CaptureError(Some(
@@ -185,7 +197,7 @@ fn capture_document(
         tray.extend(
             children
                 .iter()
-                .filter_map(|entity| tiles.get(entity).ok().map(|(id, _)| id.0)),
+                .filter_map(|entity| tiles.get(entity).ok().map(|(id, _, _)| id.0)),
         );
         if positions.len() != current.tiles.len()
             || tiles.iter().count() != positions.len()
@@ -205,7 +217,7 @@ fn capture_document(
             || current
                 .tiles
                 .iter()
-                .any(|tile| positions[&tile.id] != tile.position));
+                .any(|tile| positions[&tile.id] != (tile.position, tile.last_tray_slot)));
     if title == current.title && !positions_changed {
         problem.set_if_neq(CaptureError(None));
         return;
@@ -217,7 +229,7 @@ fn capture_document(
     if positions_changed {
         document.tray.clone_from(tray);
         for tile in &mut document.tiles {
-            tile.position = positions[&tile.id];
+            (tile.position, tile.last_tray_slot) = positions[&tile.id];
         }
     }
     match session

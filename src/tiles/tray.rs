@@ -1,10 +1,78 @@
-use super::drag::DragFollow;
+use super::animation::{HELD_SCALE, SnapAnim, TileFeel};
+use super::drag::{ActiveDrag, DragFollow};
 use crate::prelude::*;
 
 #[cfg(test)]
 mod tests;
 
 const SLIDE_SPEED: f32 = 18.0;
+const RETURN_DURATION: f32 = 0.22;
+
+#[derive(Component, Clone, Copy)]
+pub(super) struct LastTraySlot(pub usize);
+
+#[derive(Component)]
+pub(super) struct TrayReturn {
+    from: Vec2,
+    elapsed: f32,
+}
+
+type ReturnTiles<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static mut Node,
+        Option<&'static LastTraySlot>,
+    ),
+    (With<WordTile>, With<PlacedTile>, Without<DragFollow>),
+>;
+
+pub(super) fn return_tile_to_tray(
+    mut event: On<Pointer<Click>>,
+    mut commands: Commands,
+    active: Res<ActiveDrag>,
+    tray: Single<(Entity, Option<&Children>), With<BoardTray>>,
+    words: Query<(), With<WordTile>>,
+    mut tiles: ReturnTiles,
+) {
+    if event.button != PointerButton::Secondary || active.is_active() {
+        return;
+    }
+    let Ok((computed, transform, mut node, slot)) = tiles.get_mut(event.entity) else {
+        return;
+    };
+    event.propagate(false);
+    let (tray_entity, children) = tray.into_inner();
+    let index = children
+        .into_iter()
+        .flat_map(|children| children.iter().enumerate())
+        .filter(|(_, child)| words.contains(*child))
+        .nth(slot.map_or(usize::MAX, |slot| slot.0))
+        .map_or(children.map_or(0, Children::len), |(index, _)| index);
+    let from = transform.translation * computed.inverse_scale_factor;
+    node.position_type = PositionType::Relative;
+    node.left = Val::Auto;
+    node.top = Val::Auto;
+    commands
+        .entity(event.entity)
+        .remove::<(PlacedTile, SnapAnim)>()
+        .insert((
+            TrayMotion::new(from),
+            TrayReturn { from, elapsed: 0.0 },
+            GlobalZIndex(10),
+            TileFeel {
+                scale: 1.0,
+                scale_target: HELD_SCALE,
+                shadow: 0.0,
+                shadow_target: 1.0,
+            },
+        ));
+    commands
+        .entity(tray_entity)
+        .insert_children(index, &[event.entity]);
+}
 
 /// A single, full-size placeholder participates in flex layout. Animation
 /// belongs to the tiles, since animating widths makes wrapped rows jump.
@@ -159,6 +227,20 @@ pub fn tray_gap_system(
     }
 }
 
+type SlidingTiles<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ChildOf,
+        &'static ComputedNode,
+        Option<&'static mut TrayMotion>,
+        Option<&'static mut TrayReturn>,
+        Option<&'static mut TileFeel>,
+    ),
+    With<WordTile>,
+>;
+
 /// Layout computes final wrapped positions each frame. Ease only the displayed
 /// transforms afterward, including tile text, before clipping/rendering/picking.
 /// Keeping Node and UiTransform untouched avoids changing flex measurements or
@@ -167,12 +249,12 @@ pub fn tray_slide_system(
     mut commands: Commands,
     time: Res<Time>,
     tray: Single<Entity, With<BoardTray>>,
-    mut tiles: Query<(Entity, &ChildOf, &ComputedNode, Option<&mut TrayMotion>), With<WordTile>>,
+    mut tiles: SlidingTiles,
     children: Query<&Children>,
     mut transforms: Query<&mut UiGlobalTransform>,
 ) {
     let ease = 1.0 - (-SLIDE_SPEED * time.delta_secs()).exp();
-    for (entity, parent, node, motion) in &mut tiles {
+    for (entity, parent, node, motion, returning, feel) in &mut tiles {
         if parent.parent() != *tray {
             if motion.is_some() {
                 commands.entity(entity).remove::<TrayMotion>();
@@ -194,7 +276,26 @@ pub fn tray_slide_system(
             continue;
         };
         motion.layout_center = Some(target);
-        motion.center = if motion.center.distance(target) < 0.5 {
+        motion.center = if let Some(mut returning) = returning {
+            returning.elapsed += time.delta_secs();
+            let progress = (returning.elapsed / RETURN_DURATION).min(1.0);
+            let eased = progress * progress * (3.0 - 2.0 * progress);
+            let arc = 24.0 * (std::f32::consts::PI * progress).sin();
+            if progress >= 0.65
+                && let Some(mut feel) = feel
+            {
+                feel.scale_target = 1.0;
+                feel.shadow_target = 0.0;
+            }
+            if progress >= 1.0 {
+                commands
+                    .entity(entity)
+                    .remove::<(TrayReturn, GlobalZIndex)>();
+                target
+            } else {
+                returning.from.lerp(target, eased) - Vec2::Y * arc
+            }
+        } else if motion.center.distance(target) < 0.5 {
             target
         } else {
             motion.center.lerp(target, ease)

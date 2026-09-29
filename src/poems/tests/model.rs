@@ -10,11 +10,23 @@ fn duplicate_words_have_independent_stable_ids_and_ron_roundtrips() {
         x: 123.25,
     });
     draft.tray = vec![TileId(2), TileId(1)];
+    draft.tiles[0].last_tray_slot = Some(1);
     assert_ne!(draft.tiles[0].id, draft.tiles[1].id);
     book.validate().unwrap();
     let encoded = ron::to_string(&book).unwrap();
     let decoded: DraftBook = ron::from_str(&encoded).unwrap();
     assert_eq!(book, decoded);
+}
+
+#[test]
+fn older_documents_without_return_slots_still_load() {
+    let original = book();
+    let encoded = ron::to_string(&original).unwrap();
+    let legacy = encoded.replace(",last_tray_slot:None", "");
+    assert_ne!(encoded, legacy);
+    let decoded: DraftBook = ron::from_str(&legacy).unwrap();
+    decoded.validate().unwrap();
+    assert_eq!(decoded, original);
 }
 
 #[test]

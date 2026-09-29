@@ -191,6 +191,9 @@ pub fn spawn_all_tiles(world: &mut World) {
         )) {
             Ok(mut entity) => {
                 entity.insert(super::session::DocumentTile(tile.id));
+                if let Some(slot) = tile.last_tray_slot {
+                    entity.insert(super::tray::LastTraySlot(slot));
+                }
                 if let Some(position) = tile.position {
                     let Some(zone) = zone else {
                         error!("Cannot restore placed tiles without a writing zone");

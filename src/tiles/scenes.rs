@@ -6,6 +6,7 @@ use super::presentation::{
     self, BANK, INK, OUTLINE, PAGE_INSET, PAGE_LEFT, PAGE_RIGHT, PAPER, PageLead, SIGNATURE,
     TILE_FACE, TILE_RADIUS,
 };
+use super::tray::return_tile_to_tray;
 use super::writing::{
     LineGuide, ScrollThumb, ScrollTrack, WritingViewport, scroll_thumb_drag, scroll_track_press,
 };
@@ -169,7 +170,7 @@ pub(crate) fn word_tile(word: String, font: Handle<Font>, style: TileStyle) -> i
             text_style(font, 20.0, style.ink)
             template_value(LineHeight::Px(24.0)) TextLayout::no_wrap() Pickable::IGNORE
         )]
-        on(tile_drag_start) on(on_tile_drag) on(tile_drag_end)
+        on(tile_drag_start) on(on_tile_drag) on(tile_drag_end) on(return_tile_to_tray)
     }
 }
 

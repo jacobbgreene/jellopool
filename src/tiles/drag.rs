@@ -1,6 +1,8 @@
 use super::animation::{HELD_SCALE, SnapAnim, TileFeel};
 use super::placement::{LINE_PITCH, TileRect, push};
-use super::tray::{TrayGap, TrayMotion, TraySlot, child_index, insertion_slot, spawn_gap};
+use super::tray::{
+    LastTraySlot, TrayGap, TrayMotion, TrayReturn, TraySlot, child_index, insertion_slot, spawn_gap,
+};
 use super::writing::{Viewports, WritingGeometry, geometry as writing_geometry};
 use crate::prelude::*;
 use bevy::picking::pointer::{PointerAction, PointerId, PointerInput};
@@ -97,6 +99,12 @@ struct DragPlacement {
 /// Reserve synchronously, before DragFollow's deferred insertion is visible.
 #[derive(Resource, Default)]
 pub(super) struct ActiveDrag(Option<Entity>);
+
+impl ActiveDrag {
+    pub(super) fn is_active(&self) -> bool {
+        self.0.is_some()
+    }
+}
 
 fn release_drag_claim(
     mut world: bevy::ecs::world::DeferredWorld,
@@ -366,7 +374,7 @@ pub fn tile_drag_start(
     commands
         .entity(event.entity)
         .insert(ChildOf(*drag_layer))
-        .remove::<(SnapAnim, TrayMotion)>()
+        .remove::<(SnapAnim, TrayMotion, TrayReturn, GlobalZIndex)>()
         .insert(DragFollow {
             owner: event.pointer_id,
             button: event.button,
@@ -491,6 +499,11 @@ pub fn tile_drag_end(
         });
 
     if let Some((position, _)) = placement {
+        if follow.origin.is_none() {
+            commands
+                .entity(event.entity)
+                .insert(LastTraySlot(follow.tray_index));
+        }
         let to = position.resolved;
         // Keep the tile where it appears on screen, expressed as an offset
         // from the writing zone's top-left, then play the snap into the

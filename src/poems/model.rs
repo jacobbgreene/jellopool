@@ -32,6 +32,8 @@ pub(crate) struct PoemTile {
     pub id: TileId,
     pub word: String,
     pub position: Option<PaperPosition>,
+    #[serde(default)]
+    pub last_tray_slot: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,6 +55,7 @@ impl PoemDocument {
                 id: TileId(index as u32),
                 word,
                 position: None,
+                last_tray_slot: None,
             })
             .collect();
         let document = Self {

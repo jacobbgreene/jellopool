@@ -63,6 +63,7 @@ impl TrayHarness {
                     .observe(tile_drag_start)
                     .observe(on_tile_drag)
                     .observe(tile_drag_end)
+                    .observe(return_tile_to_tray)
                     .id()
             })
             .collect();
@@ -152,6 +153,19 @@ impl TrayHarness {
             DragEnd {
                 button: PointerButton::Primary,
                 distance: Vec2::ZERO,
+            },
+        );
+    }
+
+    pub(super) fn click(&mut self, entity: Entity, button: PointerButton) {
+        self.trigger(
+            entity,
+            self.center(entity),
+            Click {
+                button,
+                hit: bevy::picking::backend::HitData::new(entity, 0.0, None, None),
+                duration: std::time::Duration::from_millis(80),
+                count: 1,
             },
         );
     }

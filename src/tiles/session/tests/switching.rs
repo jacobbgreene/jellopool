@@ -17,12 +17,14 @@ fn new_and_switch_restore_title_placed_words_and_tray_order_without_duplicate_ro
     app.world_mut().entity_mut(tiles[0]).insert((
         ChildOf(zone),
         PlacedTile(Vec2::new(120.25, LINE_PITCH * 3.0)),
+        LastTraySlot(2),
     ));
     app.world_mut()
         .entity_mut(tray)
         .insert_children(0, &[tiles[3], tiles[2], tiles[1]]);
     app.update();
     let original = active(&app).clone();
+    assert_eq!(original.tiles[0].last_tray_slot, Some(2));
     app.world_mut().resource_mut::<DraftRequest>().action = Some(DraftAction::New);
     app.update();
     app.update();
@@ -34,6 +36,14 @@ fn new_and_switch_restore_title_placed_words_and_tray_order_without_duplicate_ro
     app.update();
     app.update();
     assert_eq!(active(&app), &original);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<&LastTraySlot, With<PlacedTile>>()
+            .single(app.world())
+            .unwrap()
+            .0,
+        2
+    );
     assert_eq!(
         app.world()
             .resource::<DraftSession>()

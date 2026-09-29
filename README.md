@@ -31,6 +31,12 @@ free. Dragging pushes contacted words along their line, keeping their order and
 stopping at the page edge. Pushed words stay where you move them, even if you
 return the dragged tile to the tray; other lines never reflow.
 
+Right-click a word on the page to send it back to its last tray slot, with a
+short floating return and a settle animation. Rearranging the tray updates the
+slot remembered on the next pickup. If the tray has fewer words now, the tile
+returns to the nearest available slot. Saved drafts retain these return slots;
+words placed before this feature return to the end until picked up from the tray.
+
 The tray stays outside the scrolling sheet. It retains its usual minimum height
 and grows when longer word selections need extra rows. Word-bank categories
 are validated before play; missing or undersized data exits with an explicit
